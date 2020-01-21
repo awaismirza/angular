@@ -6,13 +6,13 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {AST, ASTWithSource, AstVisitor, Binary, BindingPipe, Chain, Conditional, EmptyExpr, FunctionCall, ImplicitReceiver, Interpolation, KeyedRead, KeyedWrite, LiteralArray, LiteralMap, LiteralPrimitive, MethodCall, NonNullAssert, ParseSpan, PrefixNot, PropertyRead, PropertyWrite, Quote, SafeMethodCall, SafePropertyRead} from '@angular/compiler';
+import {AST, ASTWithSource, AstVisitor, Binary, BindingPipe, Chain, Conditional, EmptyExpr, FunctionCall, ImplicitReceiver, Interpolation, KeyedRead, KeyedWrite, LiteralArray, LiteralMap, LiteralPrimitive, MethodCall, NonNullAssert, PrefixNot, PropertyRead, PropertyWrite, Quote, SafeMethodCall, SafePropertyRead} from '@angular/compiler';
 import * as ts from 'typescript';
 
 import {TypeCheckingConfig} from './api';
-import {AbsoluteSpan, addParseSpanInfo, wrapForDiagnostics} from './diagnostics';
+import {addParseSpanInfo, ignoreDiagnostics, wrapForDiagnostics} from './diagnostics';
 
-const NULL_AS_ANY =
+export const NULL_AS_ANY =
     ts.createAsExpression(ts.createNull(), ts.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword));
 const UNDEFINED = ts.createIdentifier('undefined');
 
@@ -41,17 +41,16 @@ const BINARY_OPS = new Map<string, ts.SyntaxKind>([
  * AST.
  */
 export function astToTypescript(
-    ast: AST, maybeResolve: (ast: AST) => (ts.Expression | null), config: TypeCheckingConfig,
-    translateSpan: (span: ParseSpan) => AbsoluteSpan): ts.Expression {
-  const translator = new AstTranslator(maybeResolve, config, translateSpan);
+    ast: AST, maybeResolve: (ast: AST) => (ts.Expression | null),
+    config: TypeCheckingConfig): ts.Expression {
+  const translator = new AstTranslator(maybeResolve, config);
   return translator.translate(ast);
 }
 
 class AstTranslator implements AstVisitor {
   constructor(
       private maybeResolve: (ast: AST) => (ts.Expression | null),
-      private config: TypeCheckingConfig,
-      private translateSpan: (span: ParseSpan) => AbsoluteSpan) {}
+      private config: TypeCheckingConfig) {}
 
   translate(ast: AST): ts.Expression {
     // Skip over an `ASTWithSource` as its `visit` method calls directly into its ast's `visit`,
@@ -82,22 +81,33 @@ class AstTranslator implements AstVisitor {
       throw new Error(`Unsupported Binary.operation: ${ast.operation}`);
     }
     const node = ts.createBinary(lhs, op as any, rhs);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
-  visitChain(ast: Chain): never { throw new Error('Method not implemented.'); }
+  visitChain(ast: Chain): ts.Expression {
+    const elements = ast.expressions.map(expr => this.translate(expr));
+    const node = wrapForDiagnostics(ts.createCommaList(elements));
+    addParseSpanInfo(node, ast.sourceSpan);
+    return node;
+  }
 
   visitConditional(ast: Conditional): ts.Expression {
     const condExpr = this.translate(ast.condition);
     const trueExpr = this.translate(ast.trueExp);
     const falseExpr = this.translate(ast.falseExp);
     const node = ts.createParen(ts.createConditional(condExpr, trueExpr, falseExpr));
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
-  visitFunctionCall(ast: FunctionCall): never { throw new Error('Method not implemented.'); }
+  visitFunctionCall(ast: FunctionCall): ts.Expression {
+    const receiver = wrapForDiagnostics(this.translate(ast.target !));
+    const args = ast.args.map(expr => this.translate(expr));
+    const node = ts.createCall(receiver, undefined, args);
+    addParseSpanInfo(node, ast.sourceSpan);
+    return node;
+  }
 
   visitImplicitReceiver(ast: ImplicitReceiver): never {
     throw new Error('Method not implemented.');
@@ -116,16 +126,25 @@ class AstTranslator implements AstVisitor {
     const receiver = wrapForDiagnostics(this.translate(ast.obj));
     const key = this.translate(ast.key);
     const node = ts.createElementAccess(receiver, key);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
-  visitKeyedWrite(ast: KeyedWrite): never { throw new Error('Method not implemented.'); }
+  visitKeyedWrite(ast: KeyedWrite): ts.Expression {
+    const receiver = wrapForDiagnostics(this.translate(ast.obj));
+    const left = ts.createElementAccess(receiver, this.translate(ast.key));
+    // TODO(joost): annotate `left` with the span of the element access, which is not currently
+    //  available on `ast`.
+    const right = this.translate(ast.value);
+    const node = wrapForDiagnostics(ts.createBinary(left, ts.SyntaxKind.EqualsToken, right));
+    addParseSpanInfo(node, ast.sourceSpan);
+    return node;
+  }
 
   visitLiteralArray(ast: LiteralArray): ts.Expression {
     const elements = ast.expressions.map(expr => this.translate(expr));
     const node = ts.createArrayLiteral(elements);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
@@ -135,7 +154,7 @@ class AstTranslator implements AstVisitor {
       return ts.createPropertyAssignment(ts.createStringLiteral(key), value);
     });
     const node = ts.createObjectLiteral(properties, true);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
@@ -148,7 +167,7 @@ class AstTranslator implements AstVisitor {
     } else {
       node = ts.createLiteral(ast.value);
     }
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
@@ -157,14 +176,14 @@ class AstTranslator implements AstVisitor {
     const method = ts.createPropertyAccess(receiver, ast.name);
     const args = ast.args.map(expr => this.translate(expr));
     const node = ts.createCall(method, undefined, args);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
   visitNonNullAssert(ast: NonNullAssert): ts.Expression {
     const expr = wrapForDiagnostics(this.translate(ast.expression));
     const node = ts.createNonNullExpression(expr);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
@@ -173,7 +192,7 @@ class AstTranslator implements AstVisitor {
   visitPrefixNot(ast: PrefixNot): ts.Expression {
     const expression = wrapForDiagnostics(this.translate(ast.expression));
     const node = ts.createLogicalNot(expression);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
@@ -182,11 +201,20 @@ class AstTranslator implements AstVisitor {
     // TypeScript expression to read the property.
     const receiver = wrapForDiagnostics(this.translate(ast.receiver));
     const node = ts.createPropertyAccess(receiver, ast.name);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
-  visitPropertyWrite(ast: PropertyWrite): never { throw new Error('Method not implemented.'); }
+  visitPropertyWrite(ast: PropertyWrite): ts.Expression {
+    const receiver = wrapForDiagnostics(this.translate(ast.receiver));
+    const left = ts.createPropertyAccess(receiver, ast.name);
+    // TODO(joost): annotate `left` with the span of the property access, which is not currently
+    //  available on `ast`.
+    const right = this.translate(ast.value);
+    const node = wrapForDiagnostics(ts.createBinary(left, ts.SyntaxKind.EqualsToken, right));
+    addParseSpanInfo(node, ast.sourceSpan);
+    return node;
+  }
 
   visitQuote(ast: Quote): never { throw new Error('Method not implemented.'); }
 
@@ -194,12 +222,14 @@ class AstTranslator implements AstVisitor {
     // See the comment in SafePropertyRead above for an explanation of the need for the non-null
     // assertion here.
     const receiver = wrapForDiagnostics(this.translate(ast.receiver));
+    const guard = ts.getMutableClone(receiver);
+    ignoreDiagnostics(guard);
     const method = ts.createPropertyAccess(ts.createNonNullExpression(receiver), ast.name);
     const args = ast.args.map(expr => this.translate(expr));
     const expr = ts.createCall(method, undefined, args);
     const whenNull = this.config.strictSafeNavigationTypes ? UNDEFINED : NULL_AS_ANY;
-    const node = safeTernary(receiver, expr, whenNull);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    const node = safeTernary(guard, expr, whenNull);
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 
@@ -209,10 +239,12 @@ class AstTranslator implements AstVisitor {
     // assertion is necessary because in practice 'a' may be a method call expression, which won't
     // have a narrowed type when repeated in the ternary true branch.
     const receiver = wrapForDiagnostics(this.translate(ast.receiver));
+    const guard = ts.getMutableClone(receiver);
+    ignoreDiagnostics(guard);
     const expr = ts.createPropertyAccess(ts.createNonNullExpression(receiver), ast.name);
     const whenNull = this.config.strictSafeNavigationTypes ? UNDEFINED : NULL_AS_ANY;
-    const node = safeTernary(receiver, expr, whenNull);
-    addParseSpanInfo(node, this.translateSpan(ast.span));
+    const node = safeTernary(guard, expr, whenNull);
+    addParseSpanInfo(node, ast.sourceSpan);
     return node;
   }
 }

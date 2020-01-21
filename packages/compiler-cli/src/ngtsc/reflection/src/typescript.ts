@@ -35,8 +35,12 @@ export class TypeScriptReflectionHost implements ReflectionHost {
   getConstructorParameters(clazz: ClassDeclaration): CtorParameter[]|null {
     const tsClazz = castDeclarationToClassOrDie(clazz);
 
-    // First, find the constructor.
-    const ctor = tsClazz.members.find(ts.isConstructorDeclaration);
+    // First, find the constructor with a `body`. The constructors without a `body` are overloads
+    // whereas we want the implementation since it's the one that'll be executed and which can
+    // have decorators.
+    const ctor = tsClazz.members.find(
+        (member): member is ts.ConstructorDeclaration =>
+            ts.isConstructorDeclaration(member) && member.body !== undefined);
     if (ctor === undefined) {
       return null;
     }
@@ -182,6 +186,9 @@ export class TypeScriptReflectionHost implements ReflectionHost {
 
   getDtsDeclaration(_: ts.Declaration): ts.Declaration|null { return null; }
 
+  getInternalNameOfClass(clazz: ClassDeclaration): ts.Identifier { return clazz.name; }
+
+  getAdjacentNameOfClass(clazz: ClassDeclaration): ts.Identifier { return clazz.name; }
 
   protected getDirectImportOfIdentifier(id: ts.Identifier): Import|null {
     const symbol = this.checker.getSymbolAtLocation(id);
@@ -191,14 +198,13 @@ export class TypeScriptReflectionHost implements ReflectionHost {
       return null;
     }
 
-    // Ignore decorators that are defined locally (not imported).
     const decl: ts.Declaration = symbol.declarations[0];
-    if (!ts.isImportSpecifier(decl)) {
+    const importDecl = getContainingImportDeclaration(decl);
+
+    // Ignore declarations that are defined locally (not imported).
+    if (importDecl === null) {
       return null;
     }
-
-    // Walk back from the specifier to find the declaration, which carries the module specifier.
-    const importDecl = decl.parent !.parent !.parent !;
 
     // The module specifier is guaranteed to be a string literal, so this should always pass.
     if (!ts.isStringLiteral(importDecl.moduleSpecifier)) {
@@ -206,13 +212,7 @@ export class TypeScriptReflectionHost implements ReflectionHost {
       return null;
     }
 
-    // Read the module specifier.
-    const from = importDecl.moduleSpecifier.text;
-
-    // Compute the name by which the decorator was exported, not imported.
-    const name = (decl.propertyName !== undefined ? decl.propertyName : decl.name).text;
-
-    return {from, name};
+    return {from: importDecl.moduleSpecifier.text, name: getExportedName(decl, id)};
   }
 
   /**
@@ -272,14 +272,24 @@ export class TypeScriptReflectionHost implements ReflectionHost {
   private getDeclarationOfSymbol(symbol: ts.Symbol, originalId: ts.Identifier|null): Declaration
       |null {
     // If the symbol points to a ShorthandPropertyAssignment, resolve it.
-    if (symbol.valueDeclaration !== undefined &&
-        ts.isShorthandPropertyAssignment(symbol.valueDeclaration)) {
-      const shorthandSymbol =
-          this.checker.getShorthandAssignmentValueSymbol(symbol.valueDeclaration);
+    let valueDeclaration: ts.Declaration|undefined = undefined;
+    if (symbol.valueDeclaration !== undefined) {
+      valueDeclaration = symbol.valueDeclaration;
+    } else if (symbol.declarations !== undefined && symbol.declarations.length > 0) {
+      valueDeclaration = symbol.declarations[0];
+    }
+    if (valueDeclaration !== undefined && ts.isShorthandPropertyAssignment(valueDeclaration)) {
+      const shorthandSymbol = this.checker.getShorthandAssignmentValueSymbol(valueDeclaration);
       if (shorthandSymbol === undefined) {
         return null;
       }
       return this.getDeclarationOfSymbol(shorthandSymbol, originalId);
+    } else if (valueDeclaration !== undefined && ts.isExportSpecifier(valueDeclaration)) {
+      const targetSymbol = this.checker.getExportSpecifierLocalTargetSymbol(valueDeclaration);
+      if (targetSymbol === undefined) {
+        return null;
+      }
+      return this.getDeclarationOfSymbol(targetSymbol, originalId);
     }
 
     const importInfo = originalId && this.getImportOfIdentifier(originalId);
@@ -538,4 +548,24 @@ function getFarLeftIdentifier(propertyAccess: ts.PropertyAccessExpression): ts.I
     propertyAccess = propertyAccess.expression;
   }
   return ts.isIdentifier(propertyAccess.expression) ? propertyAccess.expression : null;
+}
+
+/**
+ * Return the ImportDeclaration for the given `node` if it is either an `ImportSpecifier` or a
+ * `NamespaceImport`. If not return `null`.
+ */
+function getContainingImportDeclaration(node: ts.Node): ts.ImportDeclaration|null {
+  return ts.isImportSpecifier(node) ? node.parent !.parent !.parent ! :
+                                      ts.isNamespaceImport(node) ? node.parent.parent : null;
+}
+
+/**
+ * Compute the name by which the `decl` was exported, not imported.
+ * If no such declaration can be found (e.g. it is a namespace import)
+ * then fallback to the `originalId`.
+ */
+function getExportedName(decl: ts.Declaration, originalId: ts.Identifier): string {
+  return ts.isImportSpecifier(decl) ?
+      (decl.propertyName !== undefined ? decl.propertyName : decl.name).text :
+      originalId.text;
 }

@@ -12,22 +12,23 @@ import {SRCSET_ATTRS, URI_ATTRS, VALID_ATTRS, VALID_ELEMENTS, getTemplateContent
 import {InertBodyHelper} from '../sanitization/inert_body';
 import {_sanitizeUrl, sanitizeSrcset} from '../sanitization/url_sanitizer';
 import {addAllToArray} from '../util/array_utils';
-import {assertDataInRange, assertDefined, assertEqual, assertGreaterThan} from '../util/assert';
+import {assertDataInRange, assertDefined, assertEqual} from '../util/assert';
 
 import {bindingUpdated} from './bindings';
 import {attachPatchData} from './context_discovery';
 import {setDelayProjection} from './instructions/all';
 import {attachI18nOpCodesDebug} from './instructions/lview_debug';
-import {TsickleIssue1009, allocExpando, elementAttributeInternal, elementPropertyInternal, getOrCreateTNode, setInputsForProperty, setNgReflectProperties, textBindingInternal} from './instructions/shared';
+import {allocExpando, elementAttributeInternal, elementPropertyInternal, getOrCreateTNode, setInputsForProperty, setNgReflectProperties, textBindingInternal} from './instructions/shared';
 import {LContainer, NATIVE} from './interfaces/container';
+import {getDocument} from './interfaces/document';
 import {COMMENT_MARKER, ELEMENT_MARKER, I18nMutateOpCode, I18nMutateOpCodes, I18nUpdateOpCode, I18nUpdateOpCodes, IcuType, TI18n, TIcu} from './interfaces/i18n';
 import {TElementNode, TIcuContainerNode, TNode, TNodeFlags, TNodeType, TProjectionNode} from './interfaces/node';
 import {RComment, RElement, RText} from './interfaces/renderer';
 import {SanitizerFn} from './interfaces/sanitization';
 import {isLContainer} from './interfaces/type_checks';
-import {BINDING_INDEX, HEADER_OFFSET, LView, RENDERER, TVIEW, TView, T_HOST} from './interfaces/view';
+import {HEADER_OFFSET, LView, RENDERER, TVIEW, TView, T_HOST} from './interfaces/view';
 import {appendChild, applyProjection, createTextNode, nativeRemoveNode} from './node_manipulation';
-import {getIsParent, getLView, getPreviousOrParentTNode, setIsNotParent, setPreviousOrParentTNode} from './state';
+import {getBindingIndex, getIsParent, getLView, getPreviousOrParentTNode, nextBindingIndex, setIsNotParent, setPreviousOrParentTNode} from './state';
 import {renderStringify} from './util/misc_utils';
 import {getNativeByIndex, getNativeByTNode, getTNode, load} from './util/view_utils';
 
@@ -189,7 +190,6 @@ function parseICUBlock(pattern: string): IcuExpression {
     }
   }
 
-  assertGreaterThan(cases.indexOf('other'), -1, 'Missing key "other" in ICU statement.');
   // TODO(ocombe): support ICU expressions in attributes, see #21615
   return {type: icuType, mainBinding: mainBinding, cases, values};
 }
@@ -366,7 +366,7 @@ export function ɵɵi18nStart(index: number, message: string, subTemplateIndex?:
   i18nIndexStack[++i18nIndexStackPointer] = index;
   // We need to delay projections until `i18nEnd`
   setDelayProjection(true);
-  if (tView.firstTemplatePass && tView.data[index + HEADER_OFFSET] === null) {
+  if (tView.firstCreatePass && tView.data[index + HEADER_OFFSET] === null) {
     i18nStartFirstPass(lView, tView, index, message, subTemplateIndex);
   }
 }
@@ -669,7 +669,7 @@ export function ɵɵi18nEnd(): void {
  */
 function i18nEndFirstPass(lView: LView, tView: TView) {
   ngDevMode && assertEqual(
-                   lView[BINDING_INDEX], tView.bindingStartIndex,
+                   getBindingIndex(), tView.bindingStartIndex,
                    'i18nEnd should be called before any binding');
 
   const rootIndex = i18nIndexStack[i18nIndexStackPointer--];
@@ -683,10 +683,21 @@ function i18nEndFirstPass(lView: LView, tView: TView) {
   const visitedNodes = readCreateOpCodes(rootIndex, tI18n.create, lView);
 
   // Remove deleted nodes
-  for (let i = rootIndex + 1; i <= lastCreatedNode.index - HEADER_OFFSET; i++) {
-    if (visitedNodes.indexOf(i) === -1) {
-      removeNode(i, lView, /* markAsDetached */ true);
+  let index = rootIndex + 1;
+  while (index <= lastCreatedNode.index - HEADER_OFFSET) {
+    if (visitedNodes.indexOf(index) === -1) {
+      removeNode(index, lView, /* markAsDetached */ true);
     }
+    // Check if an element has any local refs and skip them
+    const tNode = getTNode(index, lView);
+    if (tNode && (tNode.type === TNodeType.Element || tNode.type === TNodeType.ElementContainer) &&
+        tNode.localNames !== null) {
+      // Divide by 2 to get the number of local refs,
+      // since they are stored as an array that also includes directive indexes,
+      // i.e. ["localRef", directiveIndex, ...]
+      index += tNode.localNames.length >> 1;
+    }
+    index++;
   }
 }
 
@@ -883,18 +894,21 @@ function readUpdateOpCodes(
                 // Update the active caseIndex
                 const caseIndex = getCaseIndex(tIcu, value);
                 icuTNode.activeCaseIndex = caseIndex !== -1 ? caseIndex : null;
-
-                // Add the nodes for the new case
-                readCreateOpCodes(-1, tIcu.create[caseIndex], viewData);
-                caseCreated = true;
+                if (caseIndex > -1) {
+                  // Add the nodes for the new case
+                  readCreateOpCodes(-1, tIcu.create[caseIndex], viewData);
+                  caseCreated = true;
+                }
                 break;
               case I18nUpdateOpCode.IcuUpdate:
                 tIcuIndex = updateOpCodes[++j] as number;
                 tIcu = icus ![tIcuIndex];
                 icuTNode = getTNode(nodeIndex, viewData) as TIcuContainerNode;
-                readUpdateOpCodes(
-                    tIcu.update[icuTNode.activeCaseIndex !], icus, bindingsStartIndex, changeMask,
-                    viewData, caseCreated);
+                if (icuTNode.activeCaseIndex !== null) {
+                  readUpdateOpCodes(
+                      tIcu.update[icuTNode.activeCaseIndex], icus, bindingsStartIndex, changeMask,
+                      viewData, caseCreated);
+                }
                 break;
             }
           }
@@ -995,17 +1009,21 @@ function i18nAttributesFirstPass(lView: LView, tView: TView, index: number, valu
         // Even indexes are text (including bindings)
         const hasBinding = !!value.match(BINDING_REGEXP);
         if (hasBinding) {
-          if (tView.firstTemplatePass && tView.data[index + HEADER_OFFSET] === null) {
+          if (tView.firstCreatePass && tView.data[index + HEADER_OFFSET] === null) {
             addAllToArray(
                 generateBindingUpdateOpCodes(value, previousElementIndex, attrName), updateOpCodes);
           }
         } else {
-          elementAttributeInternal(previousElementIndex, attrName, value, lView);
-          // Check if that attribute is a directive input
           const tNode = getTNode(previousElementIndex, lView);
-          const dataValue = tNode.inputs && tNode.inputs[attrName];
+          // Set attributes for Elements only, for other types (like ElementContainer),
+          // only set inputs below
+          if (tNode.type === TNodeType.Element) {
+            elementAttributeInternal(previousElementIndex, attrName, value, lView);
+          }
+          // Check if that attribute is a directive input
+          const dataValue = tNode.inputs !== null && tNode.inputs[attrName];
           if (dataValue) {
-            setInputsForProperty(lView, dataValue, value);
+            setInputsForProperty(lView, dataValue, attrName, value);
             if (ngDevMode) {
               const element = getNativeByIndex(previousElementIndex, lView) as RElement | RComment;
               setNgReflectProperties(lView, element, tNode.type, dataValue, value);
@@ -1016,7 +1034,7 @@ function i18nAttributesFirstPass(lView: LView, tView: TView, index: number, valu
     }
   }
 
-  if (tView.firstTemplatePass && tView.data[index + HEADER_OFFSET] === null) {
+  if (tView.firstCreatePass && tView.data[index + HEADER_OFFSET] === null) {
     tView.data[index + HEADER_OFFSET] = updateOpCodes;
   }
 }
@@ -1034,9 +1052,9 @@ let shiftsCounter = 0;
  *
  * @codeGenApi
  */
-export function ɵɵi18nExp<T>(value: T): TsickleIssue1009 {
+export function ɵɵi18nExp<T>(value: T): typeof ɵɵi18nExp {
   const lView = getLView();
-  if (bindingUpdated(lView, lView[BINDING_INDEX]++, value)) {
+  if (bindingUpdated(lView, nextBindingIndex(), value)) {
     changeMask = changeMask | (1 << shiftsCounter);
   }
   shiftsCounter++;
@@ -1065,7 +1083,7 @@ export function ɵɵi18nApply(index: number) {
       updateOpCodes = (tI18n as TI18n).update;
       icus = (tI18n as TI18n).icus;
     }
-    const bindingsStartIndex = lView[BINDING_INDEX] - shiftsCounter - 1;
+    const bindingsStartIndex = getBindingIndex() - shiftsCounter - 1;
     readUpdateOpCodes(updateOpCodes, icus, bindingsStartIndex, changeMask, lView);
 
     // Reset changeMask & maskBit to default for the next update cycle
@@ -1165,7 +1183,7 @@ function icuStart(
 function parseIcuCase(
     unsafeHtml: string, parentIndex: number, nestedIcus: IcuExpression[], tIcus: TIcu[],
     expandoStartIndex: number): IcuCase {
-  const inertBodyHelper = new InertBodyHelper(document);
+  const inertBodyHelper = new InertBodyHelper(getDocument());
   const inertBodyElement = inertBodyHelper.getInertBodyElement(unsafeHtml);
   if (!inertBodyElement) {
     throw new Error('Unable to generate inert body element');

@@ -113,9 +113,9 @@ To define navigation rules, you associate *navigation paths* with your component
 
 You've learned the basics about the main building blocks of an Angular application. The following diagram shows how these basic pieces are related.
 
-<figure>
+<div class="lightbox">
   <img src="generated/images/guide/architecture/overview2.png" alt="overview">
-</figure>
+</div>
 
 * Together, a component and template define an Angular view.
   * A decorator on a component class adds the metadata, including a pointer to the associated template.

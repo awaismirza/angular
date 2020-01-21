@@ -43,6 +43,20 @@ export interface NgccEntryPointConfig {
    * entry-point's package.json file.
    */
   override?: PackageJsonFormatPropertiesMap;
+
+  /**
+   * Normally, ngcc will skip compilation of entrypoints that contain imports that can't be resolved
+   * or understood. If this option is specified, ngcc will proceed with compiling the entrypoint
+   * even in the face of such missing dependencies.
+   */
+  ignoreMissingDependencies?: boolean;
+
+  /**
+   * Enabling this option for an entrypoint tells ngcc that deep imports might be used for the files
+   * it contains, and that it should generate private re-exports alongside the NgModule of all the
+   * directives/pipes it makes available in support of those imports.
+   */
+  generateDeepReexports?: boolean;
 }
 
 /**
@@ -70,15 +84,22 @@ export interface NgccEntryPointConfig {
  */
 export const DEFAULT_NGCC_CONFIG: NgccProjectConfig = {
   packages: {
-      // Add default package configuration here. For example:
-      // '@angular/fire@^5.2.0': {
-      //   entryPoints: {
-      //     './database-deprecated': {
-      //       ignore: true,
-      //     },
-      //   },
-      // },
-  }
+    // Add default package configuration here. For example:
+    // '@angular/fire@^5.2.0': {
+    //   entryPoints: {
+    //     './database-deprecated': {ignore: true},
+    //   },
+    // },
+
+    // The `dist/` directory has a duplicate `package.json` pointing to the same files, which (under
+    // certain configurations) can causes ngcc to try to process the files twice and fail.
+    // Ignore the `dist/` entry-point.
+    'ng2-dragula': {
+      entryPoints: {
+        './dist': {ignore: true},
+      },
+    },
+  },
 };
 
 interface VersionedPackageConfig extends NgccPackageConfig {

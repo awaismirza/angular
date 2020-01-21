@@ -36,6 +36,10 @@ export interface EntryPoint extends JsonObject {
   typings: AbsoluteFsPath;
   /** Is this EntryPoint compiled with the Angular View Engine compiler? */
   compiledByAngular: boolean;
+  /** Should ngcc ignore missing dependencies and process this entrypoint anyway? */
+  ignoreMissingDependencies: boolean;
+  /** Should ngcc generate deep re-exports for this entrypoint? */
+  generateDeepReexports: boolean;
 }
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -104,7 +108,7 @@ export function getEntryPointInfo(
   // We must have a typings property
   const typings = entryPointPackageJson.typings || entryPointPackageJson.types ||
       guessTypingsFromPackageJson(fs, entryPointPath, entryPointPackageJson);
-  if (!typings) {
+  if (typeof typings !== 'string') {
     return null;
   }
 
@@ -120,6 +124,10 @@ export function getEntryPointInfo(
     package: packagePath,
     path: entryPointPath,
     typings: resolve(entryPointPath, typings), compiledByAngular,
+    ignoreMissingDependencies:
+        entryPointConfig !== undefined ? !!entryPointConfig.ignoreMissingDependencies : false,
+    generateDeepReexports:
+        entryPointConfig !== undefined ? !!entryPointConfig.generateDeepReexports : false,
   };
 
   return entryPointInfo;

@@ -7,9 +7,9 @@
  */
 
 import {CompileDirectiveMetadata, NgAnalyzedModules, StaticSymbol} from '@angular/compiler';
-import {BuiltinType, DeclarationKind, Definition, PipeInfo, Pipes, Signature, Span, Symbol, SymbolDeclaration, SymbolQuery, SymbolTable} from '@angular/compiler-cli/src/language_services';
 
 import {AstResult} from './common';
+import {BuiltinType, DeclarationKind, Definition, PipeInfo, Pipes, Signature, Span, Symbol, SymbolDeclaration, SymbolQuery, SymbolTable} from './symbols';
 
 export {
   BuiltinType,
@@ -25,6 +25,7 @@ export {
   SymbolQuery,
   SymbolTable
 };
+
 
 /**
  * The information `LanguageService` needs from the `LanguageServiceHost` to describe the content of
@@ -185,14 +186,9 @@ export interface LanguageServiceHost {
   getAnalyzedModules(): NgAnalyzedModules;
 
   /**
-   * Return a list all the template files referenced by the project.
-   */
-  getTemplateReferences(): string[];
-
-  /**
    * Return the AST for both HTML and template for the contextFile.
    */
-  getTemplateAst(template: TemplateSource): AstResult|Diagnostic;
+  getTemplateAst(template: TemplateSource): AstResult|undefined;
 
   /**
    * Return the template AST for the node that corresponds to the position.
@@ -240,16 +236,6 @@ export interface Location {
 }
 
 /**
- * The kind of diagnostic message.
- *
- * @publicApi
- */
-export enum DiagnosticKind {
-  Error,
-  Warning,
-}
-
-/**
  * The type of Angular directive. Used for QuickInfo in template.
  */
 export enum DirectiveKind {
@@ -262,11 +248,13 @@ export enum DirectiveKind {
  * ScriptElementKind for completion.
  */
 export enum CompletionKind {
+  ANGULAR_ELEMENT = 'angular element',
   ATTRIBUTE = 'attribute',
   COMPONENT = 'component',
   ELEMENT = 'element',
   ENTITY = 'entity',
   HTML_ATTRIBUTE = 'html attribute',
+  HTML_ELEMENT = 'html element',
   KEY = 'key',
   METHOD = 'method',
   PIPE = 'pipe',
@@ -275,6 +263,10 @@ export enum CompletionKind {
   TYPE = 'type',
   VARIABLE = 'variable',
 }
+
+export type CompletionEntry = Omit<ts.CompletionEntry, 'kind'>& {
+  kind: CompletionKind,
+};
 
 /**
  * A template diagnostics message chain. This is similar to the TypeScript
@@ -295,7 +287,7 @@ export interface DiagnosticMessageChain {
   /**
    * The next message in the chain.
    */
-  next?: DiagnosticMessageChain;
+  next?: DiagnosticMessageChain[];
 }
 
 /**
@@ -307,7 +299,7 @@ export interface Diagnostic {
   /**
    * The kind of diagnostic message
    */
-  kind: DiagnosticKind;
+  kind: ts.DiagnosticCategory;
 
   /**
    * The source span that should be highlighted.
@@ -387,11 +379,6 @@ export interface Hover {
  * @publicApi
  */
 export interface LanguageService {
-  /**
-   * Returns a list of all the external templates referenced by the project.
-   */
-  getTemplateReferences(): string[];
-
   /**
    * Returns a list of all error for all templates in the given file.
    */

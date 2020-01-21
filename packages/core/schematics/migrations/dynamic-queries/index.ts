@@ -27,8 +27,6 @@ export default function(): Rule {
     const basePath = process.cwd();
     const allPaths = [...buildPaths, ...testPaths];
 
-    ctx.logger.info('------ Dynamic queries migration ------');
-
     if (!allPaths.length) {
       throw new SchematicsException(
           'Could not find any tsconfig file. Cannot migrate dynamic queries.');

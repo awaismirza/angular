@@ -16,8 +16,11 @@ import {isDirectiveHost} from '../interfaces/type_checks';
 import {CLEANUP, FLAGS, LView, LViewFlags, RENDERER, TVIEW} from '../interfaces/view';
 import {assertNodeOfPossibleTypes} from '../node_assert';
 import {getLView, getPreviousOrParentTNode} from '../state';
-import {getComponentViewByIndex, getNativeByTNode, unwrapRNode} from '../util/view_utils';
+import {getComponentLViewByIndex, getNativeByTNode, unwrapRNode} from '../util/view_utils';
+
 import {getCleanup, handleError, loadComponentRenderer, markViewDirty} from './shared';
+
+
 
 /**
  * Adds an event listener to the current node.
@@ -35,11 +38,12 @@ import {getCleanup, handleError, loadComponentRenderer, markViewDirty} from './s
  */
 export function ɵɵlistener(
     eventName: string, listenerFn: (e?: any) => any, useCapture = false,
-    eventTargetResolver?: GlobalTargetResolver): void {
+    eventTargetResolver?: GlobalTargetResolver): typeof ɵɵlistener {
   const lView = getLView();
   const tNode = getPreviousOrParentTNode();
   listenerInternal(
       lView, lView[RENDERER], tNode, eventName, listenerFn, useCapture, eventTargetResolver);
+  return ɵɵlistener;
 }
 
 /**
@@ -65,11 +69,12 @@ export function ɵɵlistener(
 */
 export function ɵɵcomponentHostSyntheticListener(
     eventName: string, listenerFn: (e?: any) => any, useCapture = false,
-    eventTargetResolver?: GlobalTargetResolver): void {
+    eventTargetResolver?: GlobalTargetResolver): typeof ɵɵcomponentHostSyntheticListener {
   const lView = getLView();
   const tNode = getPreviousOrParentTNode();
   const renderer = loadComponentRenderer(tNode, lView);
   listenerInternal(lView, renderer, tNode, eventName, listenerFn, useCapture, eventTargetResolver);
+  return ɵɵcomponentHostSyntheticListener;
 }
 
 /**
@@ -111,8 +116,13 @@ function listenerInternal(
     eventTargetResolver?: GlobalTargetResolver): void {
   const tView = lView[TVIEW];
   const isTNodeDirectiveHost = isDirectiveHost(tNode);
-  const firstTemplatePass = tView.firstTemplatePass;
-  const tCleanup: false|any[] = firstTemplatePass && (tView.cleanup || (tView.cleanup = []));
+  const firstCreatePass = tView.firstCreatePass;
+  const tCleanup: false|any[] = firstCreatePass && (tView.cleanup || (tView.cleanup = []));
+
+  // When the ɵɵlistener instruction was generated and is executed we know that there is either a
+  // native listener or a directive output on this element. As such we we know that we will have to
+  // register a listener and store its cleanup function on LView.
+  const lCleanup = getCleanup(lView);
 
   ngDevMode && assertNodeOfPossibleTypes(
                    tNode, TNodeType.Element, TNodeType.Container, TNodeType.ElementContainer);
@@ -124,7 +134,6 @@ function listenerInternal(
     const native = getNativeByTNode(tNode, lView) as RElement;
     const resolved = eventTargetResolver ? eventTargetResolver(native) : EMPTY_OBJ as any;
     const target = resolved.target || native;
-    const lCleanup = getCleanup(lView);
     const lCleanupIndex = lCleanup.length;
     const idxOrTargetGetter = eventTargetResolver ?
         (_lView: LView) => eventTargetResolver(unwrapRNode(_lView[tNode.index])).target :
@@ -187,14 +196,13 @@ function listenerInternal(
   // subscribe to directive outputs
   const outputs = tNode.outputs;
   let props: PropertyAliasValue|undefined;
-  if (processOutputs && outputs != null && (props = outputs[eventName])) {
+  if (processOutputs && outputs !== null && (props = outputs[eventName])) {
     const propsLength = props.length;
     if (propsLength) {
-      const lCleanup = getCleanup(lView);
-      for (let i = 0; i < propsLength; i += 3) {
+      for (let i = 0; i < propsLength; i += 2) {
         const index = props[i] as number;
         ngDevMode && assertDataInRange(lView, index);
-        const minifiedName = props[i + 2];
+        const minifiedName = props[i + 1];
         const directiveInstance = lView[index];
         const output = directiveInstance[minifiedName];
 
@@ -248,7 +256,7 @@ function wrapListener(
     // In order to be backwards compatible with View Engine, events on component host nodes
     // must also mark the component view itself dirty (i.e. the view that it owns).
     const startView = tNode.flags & TNodeFlags.isComponentHost ?
-        getComponentViewByIndex(tNode.index, lView) :
+        getComponentLViewByIndex(tNode.index, lView) :
         lView;
 
     // See interfaces/view.ts for more on LViewFlags.ManualOnPush

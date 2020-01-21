@@ -15,7 +15,7 @@ import {diPublicInInjector, getNodeInjectable, getOrCreateNodeInjectorForNode} f
 import {ɵɵdirectiveInject} from './instructions/all';
 import {DirectiveDef} from './interfaces/definition';
 import {NodeInjectorFactory} from './interfaces/injector';
-import {TContainerNode, TElementContainerNode, TElementNode, TNodeProviderIndexes} from './interfaces/node';
+import {TContainerNode, TDirectiveHostNode, TElementContainerNode, TElementNode, TNodeProviderIndexes} from './interfaces/node';
 import {isComponentDef} from './interfaces/type_checks';
 import {LView, TData, TVIEW, TView} from './interfaces/view';
 import {getLView, getPreviousOrParentTNode} from './state';
@@ -44,7 +44,7 @@ export function providersResolver<T>(
     def: DirectiveDef<T>, providers: Provider[], viewProviders: Provider[]): void {
   const lView = getLView();
   const tView: TView = lView[TVIEW];
-  if (tView.firstTemplatePass) {
+  if (tView.firstCreatePass) {
     const isComponent = isComponentDef(def);
 
     // The list of view providers is processed first, and the flags are updated
@@ -205,7 +205,7 @@ function indexOf(item: any, arr: any[], begin: number, end: number) {
  */
 function multiProvidersFactoryResolver(
     this: NodeInjectorFactory, _: undefined, tData: TData, lData: LView,
-    tNode: TElementNode): any[] {
+    tNode: TDirectiveHostNode): any[] {
   return multiResolve(this.multi !, []);
 }
 
@@ -215,13 +215,14 @@ function multiProvidersFactoryResolver(
  * This factory knows how to concatenate itself with the existing `multi` `providers`.
  */
 function multiViewProvidersFactoryResolver(
-    this: NodeInjectorFactory, _: undefined, tData: TData, lData: LView,
-    tNode: TElementNode): any[] {
+    this: NodeInjectorFactory, _: undefined, tData: TData, lView: LView,
+    tNode: TDirectiveHostNode): any[] {
   const factories = this.multi !;
   let result: any[];
   if (this.providerFactory) {
     const componentCount = this.providerFactory.componentProviders !;
-    const multiProviders = getNodeInjectable(tData, lData, this.providerFactory !.index !, tNode);
+    const multiProviders =
+        getNodeInjectable(lView, lView[TVIEW], this.providerFactory !.index !, tNode);
     // Copy the section of the array which contains `multi` `providers` from the component
     result = multiProviders.slice(0, componentCount);
     // Insert the `viewProvider` instances.
@@ -254,8 +255,8 @@ function multiResolve(factories: Array<() => any>, result: any[]): any[] {
  */
 function multiFactory(
     factoryFn: (
-        this: NodeInjectorFactory, _: undefined, tData: TData, lData: LView, tNode: TElementNode) =>
-        any,
+        this: NodeInjectorFactory, _: undefined, tData: TData, lData: LView,
+        tNode: TDirectiveHostNode) => any,
     index: number, isViewProvider: boolean, isComponent: boolean,
     f: () => any): NodeInjectorFactory {
   const factory = new NodeInjectorFactory(factoryFn, isViewProvider, ɵɵdirectiveInject);

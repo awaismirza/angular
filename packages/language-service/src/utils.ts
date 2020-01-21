@@ -6,11 +6,11 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {AstPath, CompileDirectiveSummary, CompileTypeMetadata, CssSelector, DirectiveAst, ElementAst, EmbeddedTemplateAst, ParseSourceSpan, RecursiveTemplateAstVisitor, TemplateAst, TemplateAstPath, identifierName, templateVisitAll} from '@angular/compiler';
-import {DiagnosticTemplateInfo} from '@angular/compiler-cli/src/language_services';
+import {AstPath, CompileDirectiveSummary, CompileTypeMetadata, CssSelector, DirectiveAst, ElementAst, EmbeddedTemplateAst, HtmlAstPath, Identifiers, Node, ParseSourceSpan, RecursiveTemplateAstVisitor, RecursiveVisitor, TemplateAst, TemplateAstPath, identifierName, templateVisitAll, visitAll} from '@angular/compiler';
 import * as ts from 'typescript';
 
 import {AstResult, SelectorInfo} from './common';
+import {DiagnosticTemplateInfo} from './expression_diagnostics';
 import {Span} from './types';
 
 export interface SpanHolder {
@@ -57,11 +57,9 @@ export function isNarrower(spanA: Span, spanB: Span): boolean {
 }
 
 export function hasTemplateReference(type: CompileTypeMetadata): boolean {
-  if (type.diDeps) {
-    for (let diDep of type.diDeps) {
-      if (diDep.token && diDep.token.identifier &&
-          identifierName(diDep.token !.identifier !) == 'TemplateRef')
-        return true;
+  for (const diDep of type.diDeps) {
+    if (diDep.token && identifierName(diDep.token.identifier) === Identifiers.TemplateRef.name) {
+      return true;
     }
   }
   return false;
@@ -69,21 +67,15 @@ export function hasTemplateReference(type: CompileTypeMetadata): boolean {
 
 export function getSelectors(info: AstResult): SelectorInfo {
   const map = new Map<CssSelector, CompileDirectiveSummary>();
-  const selectors: CssSelector[] = flatten(info.directives.map(directive => {
+  const results: CssSelector[] = [];
+  for (const directive of info.directives) {
     const selectors: CssSelector[] = CssSelector.parse(directive.selector !);
-    selectors.forEach(selector => map.set(selector, directive));
-    return selectors;
-  }));
-  return {selectors, map};
-}
-
-export function flatten<T>(a: T[][]) {
-  return (<T[]>[]).concat(...a);
-}
-
-export function removeSuffix(value: string, suffix: string) {
-  if (value.endsWith(suffix)) return value.substring(0, value.length - suffix.length);
-  return value;
+    for (const selector of selectors) {
+      results.push(selector);
+      map.set(selector, directive);
+    }
+  }
+  return {selectors: results, map};
 }
 
 export function isTypescriptVersion(low: string, high?: string) {
@@ -107,15 +99,14 @@ export function diagnosticInfoFromTemplateInfo(info: AstResult): DiagnosticTempl
   };
 }
 
-export function findTemplateAstAt(
-    ast: TemplateAst[], position: number, allowWidening: boolean = false): TemplateAstPath {
+export function findTemplateAstAt(ast: TemplateAst[], position: number): TemplateAstPath {
   const path: TemplateAst[] = [];
   const visitor = new class extends RecursiveTemplateAstVisitor {
     visit(ast: TemplateAst, context: any): any {
       let span = spanOf(ast);
       if (inSpan(position, span)) {
         const len = path.length;
-        if (!len || allowWidening || isNarrower(span, spanOf(path[len - 1]))) {
+        if (!len || isNarrower(span, spanOf(path[len - 1]))) {
           path.push(ast);
         }
       } else {
@@ -149,7 +140,7 @@ export function findTemplateAstAt(
       // Ignore the host properties of a directive
       const result = this.visitChildren(context, visit => { visit(ast.inputs); });
       // We never care about the diretive itself, just its inputs.
-      if (path[path.length - 1] == ast) {
+      if (path[path.length - 1] === ast) {
         path.pop();
       }
       return result;
@@ -231,4 +222,28 @@ export function findPropertyValueOfType<T extends ts.Node>(
     if (predicate(initializer)) return initializer;
   }
   return startNode.forEachChild(c => findPropertyValueOfType(c, propName, predicate));
+}
+
+/**
+ * Find the tightest node at the specified `position` from the AST `nodes`, and
+ * return the path to the node.
+ * @param nodes HTML AST nodes
+ * @param position
+ */
+export function getPathToNodeAtPosition(nodes: Node[], position: number): HtmlAstPath {
+  const path: Node[] = [];
+  const visitor = new class extends RecursiveVisitor {
+    visit(ast: Node) {
+      const span = spanOf(ast);
+      if (inSpan(position, span)) {
+        path.push(ast);
+      } else {
+        // Returning a truthy value here will skip all children and terminate
+        // the visit.
+        return true;
+      }
+    }
+  };
+  visitAll(visitor, nodes);
+  return new AstPath<Node>(path, position);
 }

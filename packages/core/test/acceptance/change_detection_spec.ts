@@ -9,8 +9,11 @@
 
 import {CommonModule} from '@angular/common';
 import {ApplicationRef, ChangeDetectionStrategy, ChangeDetectorRef, Component, ComponentFactoryResolver, ComponentRef, Directive, DoCheck, EmbeddedViewRef, ErrorHandler, Input, NgModule, OnInit, QueryList, TemplateRef, Type, ViewChild, ViewChildren, ViewContainerRef} from '@angular/core';
-import {TestBed} from '@angular/core/testing';
+import {AfterViewChecked} from '@angular/core/src/core';
+import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {expect} from '@angular/platform-browser/testing/src/matchers';
+import {ivyEnabled} from '@angular/private/testing';
+import {BehaviorSubject} from 'rxjs';
 
 describe('change detection', () => {
 
@@ -80,7 +83,7 @@ describe('change detection', () => {
       })
       class TestCmpt {
         counter = 0;
-        @ViewChild('vc', {read: ViewContainerRef, static: false}) vcRef !: ViewContainerRef;
+        @ViewChild('vc', {read: ViewContainerRef}) vcRef !: ViewContainerRef;
 
         constructor(private _cfr: ComponentFactoryResolver) {}
 
@@ -126,6 +129,53 @@ describe('change detection', () => {
       fixture.detectChanges(false);
       expect(fixture.nativeElement).toHaveText('1|dynamic');
     });
+
+    it('should support re-enterant change detection', () => {
+      @Component({
+        selector: 'has-host-binding',
+        template: '..',
+        host: {
+          '[class.x]': 'x',
+        }
+      })
+      class HasHostBinding {
+        x = true;
+      }
+
+      @Component({
+        selector: 'child',
+        template: '<has-host-binding></has-host-binding>',
+        inputs: ['input'],
+      })
+      class Child {
+        /**
+         * @internal
+         */
+        private _input !: number;
+
+        constructor(private cdr: ChangeDetectorRef) {}
+
+        get input() { return this._input; }
+
+        set input(value: number) {
+          this._input = value;
+          this.cdr.detectChanges();
+        }
+      }
+
+      @Component({
+        selector: 'root',
+        template: '<child [input]="3"></child>',
+      })
+      class Root {
+      }
+
+      TestBed.configureTestingModule({
+        declarations: [Root, Child, HasHostBinding],
+      });
+
+      TestBed.createComponent(Root).detectChanges();
+    });
   });
 
   describe('OnPush', () => {
@@ -146,7 +196,7 @@ describe('change detection', () => {
 
     @Component({selector: 'my-app', template: '<my-comp [name]="name"></my-comp>'})
     class MyApp {
-      @ViewChild(MyComponent, {static: false}) comp !: MyComponent;
+      @ViewChild(MyComponent) comp !: MyComponent;
       name: string = 'Nancy';
     }
 
@@ -238,7 +288,7 @@ describe('change detection', () => {
         template: '<my-comp></my-comp><button id="parent" (click)="noop()"></button>'
       })
       class ButtonParent {
-        @ViewChild(MyComponent, {static: false}) comp !: MyComponent;
+        @ViewChild(MyComponent) comp !: MyComponent;
         noop() {}
       }
 
@@ -264,7 +314,7 @@ describe('change detection', () => {
         changeDetection: ChangeDetectionStrategy.OnPush
       })
       class ButtonParent implements DoCheck {
-        @ViewChild(MyComponent, {static: false}) comp !: MyComponent;
+        @ViewChild(MyComponent) comp !: MyComponent;
         noop() {}
 
         doCheckCount = 0;
@@ -273,7 +323,7 @@ describe('change detection', () => {
 
       @Component({selector: 'my-button-app', template: '<button-parent></button-parent>'})
       class MyButtonApp {
-        @ViewChild(ButtonParent, {static: false}) parent !: ButtonParent;
+        @ViewChild(ButtonParent) parent !: ButtonParent;
       }
 
       TestBed.configureTestingModule({declarations: [MyButtonApp, MyComponent, ButtonParent]});
@@ -326,7 +376,7 @@ describe('change detection', () => {
 
       @Component({selector: 'parent-comp', template: `{{ doCheckCount}} - <my-comp></my-comp>`})
       class ParentComp implements DoCheck {
-        @ViewChild(MyComp, {static: false}) myComp !: MyComp;
+        @ViewChild(MyComp) myComp !: MyComp;
 
         doCheckCount = 0;
 
@@ -411,8 +461,8 @@ describe('change detection', () => {
       it('should check component view when called by directive on component node', () => {
         @Component({template: '<my-comp dir></my-comp>'})
         class MyApp {
-          @ViewChild(MyComp, {static: false}) myComp !: MyComp;
-          @ViewChild(Dir, {static: false}) dir !: Dir;
+          @ViewChild(MyComp) myComp !: MyComp;
+          @ViewChild(Dir) dir !: Dir;
         }
 
         TestBed.configureTestingModule({declarations: [MyComp, Dir, MyApp]});
@@ -429,8 +479,8 @@ describe('change detection', () => {
       it('should check host component when called by directive on element node', () => {
         @Component({template: '{{ value }}<div dir></div>'})
         class MyApp {
-          @ViewChild(MyComp, {static: false}) myComp !: MyComp;
-          @ViewChild(Dir, {static: false}) dir !: Dir;
+          @ViewChild(MyComp) myComp !: MyComp;
+          @ViewChild(Dir) dir !: Dir;
           value = '';
         }
 
@@ -450,7 +500,7 @@ describe('change detection', () => {
       it('should check the host component when called from EmbeddedViewRef', () => {
         @Component({template: '{{ name }}<div *ngIf="showing" dir></div>'})
         class MyApp {
-          @ViewChild(Dir, {static: false}) dir !: Dir;
+          @ViewChild(Dir) dir !: Dir;
           showing = true;
           name = 'Amelia';
         }
@@ -601,7 +651,7 @@ describe('change detection', () => {
                 '<ng-template #foo let-ctx="ctx">{{ ctx.value }}</ng-template><structural-comp [tmp]="foo"></structural-comp>'
           })
           class App {
-            @ViewChild(StructuralComp, {static: false}) structuralComp !: StructuralComp;
+            @ViewChild(StructuralComp) structuralComp !: StructuralComp;
           }
 
           TestBed.configureTestingModule({declarations: [App, StructuralComp]});
@@ -630,7 +680,7 @@ describe('change detection', () => {
             template: '<ng-template #foo>Template text</ng-template><structural-comp [tmp]="foo">'
           })
           class App {
-            @ViewChild(StructuralComp, {static: false}) structuralComp !: StructuralComp;
+            @ViewChild(StructuralComp) structuralComp !: StructuralComp;
           }
 
           TestBed.configureTestingModule({declarations: [App, StructuralComp]});
@@ -661,7 +711,7 @@ describe('change detection', () => {
 
       @Component({template: '<detached-comp></detached-comp>'})
       class MyApp {
-        @ViewChild(DetachedComp, {static: false}) comp !: DetachedComp;
+        @ViewChild(DetachedComp) comp !: DetachedComp;
 
         constructor(public cdr: ChangeDetectorRef) {}
       }
@@ -772,7 +822,7 @@ describe('change detection', () => {
 
         @Component({template: '<on-push-comp [value]="value"></on-push-comp>'})
         class OnPushApp {
-          @ViewChild(OnPushComp, {static: false}) onPushComp !: OnPushComp;
+          @ViewChild(OnPushComp) onPushComp !: OnPushComp;
           value = '';
         }
 
@@ -819,7 +869,7 @@ describe('change detection', () => {
         changeDetection: ChangeDetectionStrategy.OnPush
       })
       class OnPushParent {
-        @ViewChild(OnPushComp, {static: false}) comp !: OnPushComp;
+        @ViewChild(OnPushComp) comp !: OnPushComp;
         value = 'one';
       }
 
@@ -881,7 +931,7 @@ describe('change detection', () => {
           changeDetection: ChangeDetectionStrategy.OnPush
         })
         class EmbeddedViewParent {
-          @ViewChild(OnPushComp, {static: false}) comp !: OnPushComp;
+          @ViewChild(OnPushComp) comp !: OnPushComp;
           value = 'one';
           showing = true;
         }
@@ -912,6 +962,41 @@ describe('change detection', () => {
         fixture.detectChanges();
         expect(fixture.nativeElement.textContent).toEqual('two - two');
       });
+
+      it('async pipe should trigger CD for embedded views where the declaration and insertion views are different',
+         () => {
+           @Component({
+             selector: 'insertion',
+             changeDetection: ChangeDetectionStrategy.OnPush,
+             template: ` <ng-container [ngTemplateOutlet]="template"> </ng-container> `
+           })
+           class Insertion {
+             @Input() template !: TemplateRef<{}>;
+           }
+
+           // This component uses async pipe (which calls markForCheck) in a view that has different
+           // insertion and declaration views.
+           @Component({
+             changeDetection: ChangeDetectionStrategy.OnPush,
+             template: `
+          <insertion [template]="ref"></insertion>
+          <ng-template #ref>
+            <span>{{value | async}}</span>
+          </ng-template>
+          `
+           })
+           class Declaration {
+             value = new BehaviorSubject('initial value');
+           }
+
+           const fixture = TestBed.configureTestingModule({declarations: [Insertion, Declaration]})
+                               .createComponent(Declaration);
+           fixture.detectChanges();
+           expect(fixture.debugElement.nativeElement.textContent).toContain('initial value');
+           fixture.componentInstance.value.next('new value');
+           fixture.detectChanges();
+           expect(fixture.debugElement.nativeElement.textContent).toContain('new value');
+         });
 
       // TODO(kara): add test for dynamic views once bug fix is in
     });
@@ -1015,4 +1100,419 @@ describe('change detection', () => {
 
   });
 
+  describe('transplanted views', () => {
+    @Component({
+      selector: 'insert-comp',
+      changeDetection: ChangeDetectionStrategy.OnPush,
+      template: `
+        InsertComp({{greeting}})
+        <div *ngIf="true">
+          <!-- Add extra level of embedded view to ensure we can handle nesting -->
+          <ng-container
+              [ngTemplateOutlet]="template"
+              [ngTemplateOutletContext]="{$implicit: greeting}">
+          </ng-container>
+        </div>
+      `
+    })
+    class InsertComp implements DoCheck,
+        AfterViewChecked {
+      get template(): TemplateRef<any> { return declareComp.myTmpl; }
+      greeting: string = 'Hello';
+      constructor(public changeDetectorRef: ChangeDetectorRef) { insertComp = this; }
+      ngDoCheck(): void { logValue = 'Insert'; }
+      ngAfterViewChecked(): void { logValue = null; }
+    }
+
+    @Component({
+      selector: `declare-comp`,
+      template: `
+        DeclareComp({{name}})
+        <ng-template #myTmpl let-greeting>
+          {{greeting}} {{logName()}}!
+        </ng-template>
+      `
+    })
+    class DeclareComp implements DoCheck,
+        AfterViewChecked {
+      @ViewChild('myTmpl')
+      myTmpl !: TemplateRef<any>;
+      name: string = 'world';
+      constructor() { declareComp = this; }
+      ngDoCheck(): void { logValue = 'Declare'; }
+      logName() {
+        // This will log when the embedded view gets CD. The `logValue` will show if the CD was from
+        // `Insert` or from `Declare` component.
+        log.push(logValue !);
+        return this.name;
+      }
+      ngAfterViewChecked(): void { logValue = null; }
+    }
+
+    @Component({
+      template: `
+      <declare-comp *ngIf="showDeclare"></declare-comp>
+      <insert-comp *ngIf="showInsert"></insert-comp>
+      `
+    })
+    class AppComp {
+      showDeclare: boolean = true;
+      showInsert: boolean = true;
+      constructor() { appComp = this; }
+    }
+
+    let log !: string[];
+    let logValue !: string | null;
+    let fixture !: ComponentFixture<AppComp>;
+    let appComp !: AppComp;
+    let insertComp !: InsertComp;
+    let declareComp !: DeclareComp;
+
+    beforeEach(() => {
+      TestBed.configureTestingModule({
+        declarations: [InsertComp, DeclareComp, AppComp],
+        imports: [CommonModule],
+      });
+      log = [];
+      fixture = TestBed.createComponent(AppComp);
+    });
+
+    it('should CD with declaration', () => {
+      // NOTE: The CD of VE and Ivy is different and is captured in the assertions:
+      // `expect(log).toEqual(ivyEnabled ? [...] : [...])`
+      //
+      // The reason for this difference is in the algorithm which VE and Ivy use to deal with
+      // transplanted views:
+      // - VE: always runs CD at insertion point. If the insertion component is `OnPush` and the
+      //   transplanted view is `CheckAlways` then the insertion component will be changed to
+      //   `CheckAlways` (defeating the benefit of `OnPush`)
+      // - Ivy: Runs the CD at both the declaration as well as insertion point. The benefit of this
+      //   approach is that each side (declaration/insertion) gets to keep its own semantics (either
+      //   `OnPush` or `CheckAlways`). The implication is that:
+      //   1. The two semantics are slightly different.
+      //   2. Ivy will CD the transplanted view twice under some circumstances. (When both insertion
+      //      and declaration are both dirty.)
+
+      fixture.detectChanges(false);
+      expect(log).toEqual(['Insert']);
+      log.length = 0;
+      expect(trim(fixture.nativeElement.textContent))
+          .toEqual('DeclareComp(world) InsertComp(Hello) Hello world!');
+
+      declareComp.name = 'Angular';
+      fixture.detectChanges(false);
+      expect(log).toEqual(ivyEnabled ? ['Declare'] : ['Insert']);
+      log.length = 0;
+      // Expect transplanted LView to be CD because the declaration is CD.
+      expect(trim(fixture.nativeElement.textContent))
+          .toEqual('DeclareComp(Angular) InsertComp(Hello) Hello Angular!');
+
+      insertComp.greeting = 'Hi';
+      fixture.detectChanges(false);
+      expect(log).toEqual(ivyEnabled ? ['Declare'] : ['Insert']);
+      log.length = 0;
+      // expect no change because it is on push.
+      expect(trim(fixture.nativeElement.textContent))
+          .toEqual('DeclareComp(Angular) InsertComp(Hello) Hello Angular!');
+
+      insertComp.changeDetectorRef.markForCheck();
+      fixture.detectChanges(false);
+      expect(log).toEqual(ivyEnabled ? ['Declare', 'Insert'] : ['Insert']);
+      log.length = 0;
+      expect(trim(fixture.nativeElement.textContent))
+          .toEqual('DeclareComp(Angular) InsertComp(Hi) Hi Angular!');
+
+      // Destroy insertion should also destroy declaration
+      appComp.showInsert = false;
+      insertComp.changeDetectorRef.markForCheck();
+      fixture.detectChanges(false);
+      expect(log).toEqual([]);
+      log.length = 0;
+      expect(trim(fixture.nativeElement.textContent)).toEqual('DeclareComp(Angular)');
+
+      // Restore both
+      appComp.showInsert = true;
+      fixture.detectChanges(false);
+      expect(log).toEqual(['Insert']);
+      log.length = 0;
+      expect(trim(fixture.nativeElement.textContent))
+          .toEqual('DeclareComp(Angular) InsertComp(Hello) Hello Angular!');
+
+      // Destroy declaration, But we should still be able to see updates in insertion
+      appComp.showDeclare = false;
+      insertComp.greeting = 'Hello';
+      insertComp.changeDetectorRef.markForCheck();
+      fixture.detectChanges(false);
+      expect(log).toEqual(['Insert']);
+      log.length = 0;
+      expect(trim(fixture.nativeElement.textContent)).toEqual('InsertComp(Hello) Hello Angular!');
+    });
+  });
+
+  describe('OnPush markForCheck in lifecycle hooks', () => {
+    describe('with check no changes enabled', () => createOnPushMarkForCheckTests(true));
+    describe('with check no changes disabled', () => createOnPushMarkForCheckTests(false));
+
+    function createOnPushMarkForCheckTests(checkNoChanges: boolean) {
+      const detectChanges = (f: ComponentFixture<any>) => f.detectChanges(checkNoChanges);
+
+      // 1. ngAfterViewInit and ngAfterViewChecked lifecycle hooks run after "OnPushComp" has
+      //    been refreshed. They can mark the component as dirty. Meaning that the "OnPushComp"
+      //    can be checked/refreshed in a subsequent change detection cycle.
+      // 2. ngDoCheck and ngAfterContentChecked lifecycle hooks run before "OnPushComp" is
+      //    refreshed. This means that those hooks cannot leave the component as dirty because
+      //    the dirty state is reset afterwards. Though these hooks run every change detection
+      //    cycle before "OnPushComp" is considered for refreshing. Hence marking as dirty from
+      //    within such a hook can cause the component to checked/refreshed as intended.
+      ['ngAfterViewInit', 'ngAfterViewChecked', 'ngAfterContentChecked', 'ngDoCheck'].forEach(
+          hookName => {
+            it(`should be able to mark component as dirty from within ${hookName}`, () => {
+              @Component({
+                selector: 'on-push-comp',
+                changeDetection: ChangeDetectionStrategy.OnPush,
+                template: `<p>{{text}}</p>`,
+              })
+              class OnPushComp {
+                text = 'initial';
+
+                constructor(private _cdRef: ChangeDetectorRef){}
+
+                    [hookName]() {
+                  this._cdRef.markForCheck();
+                }
+              }
+
+              @Component({template: `<on-push-comp></on-push-comp>`})
+              class TestApp {
+                @ViewChild(OnPushComp) onPushComp !: OnPushComp;
+              }
+
+              TestBed.configureTestingModule(
+                  {declarations: [TestApp, OnPushComp], imports: [CommonModule]});
+              const fixture = TestBed.createComponent(TestApp);
+              const pElement = fixture.nativeElement.querySelector('p') as HTMLElement;
+
+              detectChanges(fixture);
+              expect(pElement.textContent).toBe('initial');
+
+              // "OnPushComp" component should be re-checked since it has been left dirty
+              // in the first change detection (through the lifecycle hook). Hence, setting
+              // a programmatic value and triggering a new change detection cycle should cause
+              // the text to be updated in the view.
+              fixture.componentInstance.onPushComp.text = 'new';
+              detectChanges(fixture);
+              expect(pElement.textContent).toBe('new');
+            });
+          });
+
+      // ngOnInit and ngAfterContentInit lifecycle hooks run once before "OnPushComp" is
+      // refreshed/checked. This means they cannot mark the component as dirty because the
+      // component dirty state will immediately reset after these hooks complete.
+      ['ngOnInit', 'ngAfterContentInit'].forEach(hookName => {
+        it(`should not be able to mark component as dirty from within ${hookName}`, () => {
+          @Component({
+            selector: 'on-push-comp',
+            changeDetection: ChangeDetectionStrategy.OnPush,
+            template: `<p>{{text}}</p>`,
+          })
+          class OnPushComp {
+            text = 'initial';
+
+            constructor(private _cdRef: ChangeDetectorRef){}
+
+                [hookName]() {
+              this._cdRef.markForCheck();
+            }
+          }
+
+          @Component({template: `<on-push-comp></on-push-comp>`})
+          class TestApp {
+            @ViewChild(OnPushComp) onPushComp !: OnPushComp;
+          }
+
+          TestBed.configureTestingModule(
+              {declarations: [TestApp, OnPushComp], imports: [CommonModule]});
+          const fixture = TestBed.createComponent(TestApp);
+          const pElement = fixture.nativeElement.querySelector('p') as HTMLElement;
+
+          detectChanges(fixture);
+          expect(pElement.textContent).toBe('initial');
+
+          fixture.componentInstance.onPushComp.text = 'new';
+          // this is a noop since the "OnPushComp" component is not marked as dirty. The
+          // programmatically updated value will not be reflected in the rendered view.
+          detectChanges(fixture);
+          expect(pElement.textContent).toBe('initial');
+        });
+      });
+    }
+  });
+
+  describe('ExpressionChangedAfterItHasBeenCheckedError', () => {
+    @Component({template: '...'})
+    class MyApp {
+      a: string = 'a';
+      b: string = 'b';
+      c: string = 'c';
+      unstableBooleanExpression: boolean = true;
+      unstableStringExpression: string = 'initial';
+      unstableColorExpression: string = 'red';
+      unstableStyleMapExpression: {[key: string]: string;} = {'color': 'red', 'margin': '10px'};
+      unstableClassMapExpression: {[key: string]: boolean;} = {'classA': true, 'classB': false};
+
+      ngAfterViewChecked() {
+        this.unstableBooleanExpression = false;
+        this.unstableStringExpression = 'changed';
+        this.unstableColorExpression = 'green';
+        this.unstableStyleMapExpression = {'color': 'green', 'margin': '20px'};
+        this.unstableClassMapExpression = {'classA': false, 'classB': true};
+      }
+    }
+
+    function initComponent(overrides: {[key: string]: any}): ComponentFixture<MyApp> {
+      TestBed.configureTestingModule({declarations: [MyApp]});
+      TestBed.overrideComponent(MyApp, {set: overrides});
+      const fixture = TestBed.createComponent(MyApp);
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    function initWithTemplate(template: string) { return initComponent({template}); }
+    function initWithHostBindings(bindings: {[key: string]: string}) {
+      return initComponent({host: bindings});
+    }
+
+    it('should include field name in case of property binding', () => {
+      const message = ivyEnabled ? `Previous value for 'id': 'initial'. Current value: 'changed'` :
+                                   `Previous value: 'id: initial'. Current value: 'id: changed'`;
+      expect(() => initWithTemplate('<div [id]="unstableStringExpression"></div>'))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should include field name in case of property interpolation', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'id': 'Expressions: a and initial!'. Current value: 'Expressions: a and changed!'` :
+          `Previous value: 'id: Expressions: a and initial!'. Current value: 'id: Expressions: a and changed!'`;
+      expect(
+          () => initWithTemplate(
+              '<div id="Expressions: {{ a }} and {{ unstableStringExpression }}!"></div>'))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should include field name in case of attribute binding', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'attr.id': 'initial'. Current value: 'changed'` :
+          `Previous value: 'id: initial'. Current value: 'id: changed'`;
+      expect(() => initWithTemplate('<div [attr.id]="unstableStringExpression"></div>'))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should include field name in case of attribute interpolation', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'attr.id': 'Expressions: a and initial!'. Current value: 'Expressions: a and changed!'` :
+          `Previous value: 'id: Expressions: a and initial!'. Current value: 'id: Expressions: a and changed!'`;
+      expect(
+          () => initWithTemplate(
+              '<div attr.id="Expressions: {{ a }} and {{ unstableStringExpression }}!"></div>'))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should only display a value of an expression that was changed in text interpolation',
+       () => {
+         expect(() => initWithTemplate('Expressions: {{ a }} and {{ unstableStringExpression }}!'))
+             .toThrowError(/Previous value: '.*?initial'. Current value: '.*?changed'/);
+       });
+
+    it('should only display a value of an expression that was changed in text interpolation ' +
+           'that follows an element with property interpolation',
+       () => {
+         expect(() => {
+           initWithTemplate(`
+             <div id="Prop interpolation: {{ aVal }}"></div>
+             Text interpolation: {{ unstableStringExpression }}.
+           `);
+         }).toThrowError(/Previous value: '.*?initial'. Current value: '.*?changed'/);
+       });
+
+    it('should include style prop name in case of style binding', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'style.color': 'red'. Current value: 'green'` :
+          `Previous value: 'color: red'. Current value: 'color: green'`;
+      expect(() => initWithTemplate('<div [style.color]="unstableColorExpression"></div>'))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should include class name in case of class binding', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'class.someClass': 'true'. Current value: 'false'` :
+          `Previous value: 'someClass: true'. Current value: 'someClass: false'`;
+      expect(() => initWithTemplate('<div [class.someClass]="unstableBooleanExpression"></div>'))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should only display a value of an expression that was changed in text interpolation inside i18n block',
+       () => {
+         expect(
+             () => initWithTemplate('<div i18n>Expression: {{ unstableStringExpression }}</div>'))
+             .toThrowError(/Previous value: '.*?initial'. Current value: '.*?changed'/);
+       });
+
+    it('should only display a value of an expression for interpolation inside an i18n property',
+       () => {
+         expect(
+             () => initWithTemplate(
+                 '<div i18n-title title="Expression: {{ unstableStringExpression }}"></div>'))
+             .toThrowError(/Previous value: '.*?initial'. Current value: '.*?changed'/);
+       });
+
+    it('should include field name in case of host property binding', () => {
+      const message = ivyEnabled ? `Previous value for 'id': 'initial'. Current value: 'changed'` :
+                                   `Previous value: 'id: initial'. Current value: 'id: changed'`;
+      expect(() => initWithHostBindings({'[id]': 'unstableStringExpression'}))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should include style prop name in case of host style bindings', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'style.color': 'red'. Current value: 'green'` :
+          `Previous value: 'color: red'. Current value: 'color: green'`;
+      expect(() => initWithHostBindings({'[style.color]': 'unstableColorExpression'}))
+          .toThrowError(new RegExp(message));
+    });
+
+    it('should include class name in case of host class bindings', () => {
+      const message = ivyEnabled ?
+          `Previous value for 'class.someClass': 'true'. Current value: 'false'` :
+          `Previous value: 'someClass: true'. Current value: 'someClass: false'`;
+      expect(() => initWithHostBindings({'[class.someClass]': 'unstableBooleanExpression'}))
+          .toThrowError(new RegExp(message));
+    });
+
+    // Note: the tests below currently fail in Ivy, but not in VE. VE behavior is correct and Ivy's
+    // logic should be fixed by the upcoming styling refactor, we keep these tests to verify that.
+    //
+    // it('should not throw for style maps', () => {
+    //  expect(() => initWithTemplate('<div [style]="unstableStyleMapExpression"></div>'))
+    //      .not.toThrowError();
+    // });
+    //
+    // it('should not throw for class maps', () => {
+    //   expect(() => initWithTemplate('<div [class]="unstableClassMapExpression"></div>'))
+    //       .not.toThrowError();
+    // });
+    //
+    // it('should not throw for style maps as host bindings', () => {
+    //   expect(() => initWithHostBindings({'[style]': 'unstableStyleMapExpression'}))
+    //       .not.toThrowError();
+    // });
+    //
+    // it('should not throw for class maps as host binding', () => {
+    //   expect(() => initWithHostBindings({'[class]': 'unstableClassMapExpression'}))
+    //       .not.toThrowError();
+    // });
+  });
 });
+
+function trim(text: string | null): string {
+  return text ? text.replace(/[\s\n]+/gm, ' ').trim() : '';
+}

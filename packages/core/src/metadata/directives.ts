@@ -542,6 +542,7 @@ export interface Component extends Directive {
    * this component. For each component listed here,
    * Angular creates a {@link ComponentFactory} and stores it in the
    * {@link ComponentFactoryResolver}.
+   * @deprecated Since 9.0.0. With Ivy, this property is no longer necessary.
    */
   entryComponents?: Array<Type<any>|any[]>;
 
@@ -871,6 +872,29 @@ export interface HostListener {
  *   template: '<button counting>Increment</button>',
  * })
  * class App {}
+ *
+ * ```
+ *
+ * The following example registers another DOM event handler that listens for key-press events.
+ * ``` ts
+ * import { HostListener, Component } from "@angular/core";
+ *
+ * @Component({
+ *   selector: 'app',
+ *   template: `<h1>Hello, you have pressed keys {{counter}} number of times!</h1> Press any key to
+ * increment the counter.
+ *   <button (click)="resetCounter()">Reset Counter</button>`
+ * })
+ * class AppComponent {
+ *   counter = 0;
+ *   @HostListener('window:keydown', ['$event'])
+ *   handleKeyDown(event: KeyboardEvent) {
+ *     this.counter++;
+ *   }
+ *   resetCounter() {
+ *     this.counter = 0;
+ *   }
+ * }
  * ```
  *
  * @Annotation

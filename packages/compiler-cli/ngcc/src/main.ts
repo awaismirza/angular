@@ -12,10 +12,12 @@ import {DepGraph} from 'dependency-graph';
 import * as os from 'os';
 import * as ts from 'typescript';
 
+import {replaceTsWithNgInErrors} from '../../src/ngtsc/diagnostics';
 import {AbsoluteFsPath, FileSystem, absoluteFrom, dirname, getFileSystem, resolve} from '../../src/ngtsc/file_system';
 
 import {CommonJsDependencyHost} from './dependencies/commonjs_dependency_host';
 import {DependencyResolver, InvalidEntryPoint, PartiallyOrderedEntryPoints, SortedEntryPointsInfo} from './dependencies/dependency_resolver';
+import {DtsDependencyHost} from './dependencies/dts_dependency_host';
 import {EsmDependencyHost} from './dependencies/esm_dependency_host';
 import {ModuleResolver} from './dependencies/module_resolver';
 import {UmdDependencyHost} from './dependencies/umd_dependency_host';
@@ -97,6 +99,19 @@ export interface SyncNgccOptions {
    * Default: `false` (i.e. run synchronously)
    */
   async?: false;
+
+  /**
+   * Render `$localize` messages with legacy format ids.
+   *
+   * The default value is `true`. Only set this to `false` if you do not want legacy message ids to
+   * be rendered. For example, if you are not using legacy message ids in your translation files
+   * AND are not doing compile-time inlining of translations, in which case the extra message ids
+   * would add unwanted size to the final source bundle.
+   *
+   * It is safe to leave this set to true if you are doing compile-time inlining because the extra
+   * legacy message ids will all be stripped during translation.
+   */
+  enableI18nLegacyMessageIdFormat?: boolean;
 }
 
 /**
@@ -124,8 +139,8 @@ export function mainNgcc(options: SyncNgccOptions): void;
 export function mainNgcc(
     {basePath, targetEntryPointPath, propertiesToConsider = SUPPORTED_FORMAT_PROPERTIES,
      compileAllFormats = true, createNewEntryPointFormats = false,
-     logger = new ConsoleLogger(LogLevel.info), pathMappings, async = false}: NgccOptions): void|
-    Promise<void> {
+     logger = new ConsoleLogger(LogLevel.info), pathMappings, async = false,
+     enableI18nLegacyMessageIdFormat = true}: NgccOptions): void|Promise<void> {
   // Execute in parallel, if async execution is acceptable and there are more than 1 CPU cores.
   const inParallel = async && (os.cpus().length > 1);
 
@@ -150,12 +165,15 @@ export function mainNgcc(
     const esmDependencyHost = new EsmDependencyHost(fileSystem, moduleResolver);
     const umdDependencyHost = new UmdDependencyHost(fileSystem, moduleResolver);
     const commonJsDependencyHost = new CommonJsDependencyHost(fileSystem, moduleResolver);
-    const dependencyResolver = new DependencyResolver(fileSystem, logger, {
-      esm5: esmDependencyHost,
-      esm2015: esmDependencyHost,
-      umd: umdDependencyHost,
-      commonjs: commonJsDependencyHost
-    });
+    const dtsDependencyHost = new DtsDependencyHost(fileSystem, pathMappings);
+    const dependencyResolver = new DependencyResolver(
+        fileSystem, logger, {
+          esm5: esmDependencyHost,
+          esm2015: esmDependencyHost,
+          umd: umdDependencyHost,
+          commonjs: commonJsDependencyHost
+        },
+        dtsDependencyHost);
 
     const absBasePath = absoluteFrom(basePath);
     const config = new NgccConfiguration(fileSystem, dirname(absBasePath));
@@ -241,21 +259,26 @@ export function mainNgcc(
       }
 
       const bundle = makeEntryPointBundle(
-          fileSystem, entryPoint, formatPath, isCore, format, processDts, pathMappings, true);
+          fileSystem, entryPoint, formatPath, isCore, format, processDts, pathMappings, true,
+          enableI18nLegacyMessageIdFormat);
 
       logger.info(`Compiling ${entryPoint.name} : ${formatProperty} as ${format}`);
 
       const result = transformer.transform(bundle);
       if (result.success) {
         if (result.diagnostics.length > 0) {
-          logger.warn(ts.formatDiagnostics(result.diagnostics, bundle.src.host));
+          logger.warn(replaceTsWithNgInErrors(
+              ts.formatDiagnosticsWithColorAndContext(result.diagnostics, bundle.src.host)));
         }
         fileWriter.writeBundle(bundle, result.transformedFiles, formatPropertiesToMarkAsProcessed);
       } else {
-        const errors = ts.formatDiagnostics(result.diagnostics, bundle.src.host);
+        const errors = replaceTsWithNgInErrors(
+            ts.formatDiagnosticsWithColorAndContext(result.diagnostics, bundle.src.host));
         throw new Error(
-            `Failed to compile entry-point ${entryPoint.name} due to compilation errors:\n${errors}`);
+            `Failed to compile entry-point ${entryPoint.name} (${formatProperty} as ${format}) due to compilation errors:\n${errors}`);
       }
+
+      logger.debug(`  Successfully compiled ${entryPoint.name} : ${formatProperty}`);
 
       onTaskCompleted(task, TaskProcessingOutcome.Processed);
     };
@@ -360,7 +383,7 @@ function getTargetedEntryPoints(
   if (invalidTarget !== undefined) {
     throw new Error(
         `The target entry-point "${invalidTarget.entryPoint.name}" has missing dependencies:\n` +
-        invalidTarget.missingDependencies.map(dep => ` - ${dep}\n`));
+        invalidTarget.missingDependencies.map(dep => ` - ${dep}\n`).join(''));
   }
   if (entryPointInfo.entryPoints.length === 0) {
     markNonAngularPackageAsProcessed(fs, pkgJsonUpdater, absoluteTargetEntryPointPath);

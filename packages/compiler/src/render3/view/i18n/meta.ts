@@ -8,7 +8,7 @@
 
 import {computeDecimalDigest, computeDigest, decimalDigest} from '../../../i18n/digest';
 import * as i18n from '../../../i18n/i18n_ast';
-import {createI18nMessageFactory} from '../../../i18n/i18n_parser';
+import {VisitNodeFn, createI18nMessageFactory} from '../../../i18n/i18n_parser';
 import * as html from '../../../ml_parser/ast';
 import {DEFAULT_INTERPOLATION_CONFIG, InterpolationConfig} from '../../../ml_parser/interpolation_config';
 import * as o from '../../../output/output_ast';
@@ -18,14 +18,25 @@ import {I18N_ATTR, I18N_ATTR_PREFIX, hasI18nAttrs, icuFromI18nMessage} from './u
 export type I18nMeta = {
   id?: string,
   customId?: string,
-  legacyId?: string,
+  legacyIds?: string[],
   description?: string,
   meaning?: string
 };
 
-function setI18nRefs(html: html.Node & {i18n?: i18n.AST}, i18n: i18n.Node) {
-  html.i18n = i18n;
-}
+
+const setI18nRefs: VisitNodeFn = (htmlNode, i18nNode) => {
+  if (htmlNode instanceof html.NodeWithI18n) {
+    if (i18nNode instanceof i18n.IcuPlaceholder && htmlNode.i18n instanceof i18n.Message) {
+      // This html node represents an ICU but this is a second processing pass, and the legacy id
+      // was computed in the previous pass and stored in the `i18n` property as a message.
+      // We are about to wipe out that property so capture the previous message to be reused when
+      // generating the message for this ICU later. See `_generateI18nMessage()`.
+      i18nNode.previousMessage = htmlNode.i18n;
+    }
+    htmlNode.i18n = i18nNode;
+  }
+  return i18nNode;
+};
 
 /**
  * This visitor walks over HTML parse tree and converts information stored in
@@ -33,42 +44,29 @@ function setI18nRefs(html: html.Node & {i18n?: i18n.AST}, i18n: i18n.Node) {
  * stored with other element's and attribute's information.
  */
 export class I18nMetaVisitor implements html.Visitor {
+  // whether visited nodes contain i18n information
+  public hasI18nMeta: boolean = false;
+
   // i18n message generation factory
   private _createI18nMessage = createI18nMessageFactory(this.interpolationConfig);
 
   constructor(
       private interpolationConfig: InterpolationConfig = DEFAULT_INTERPOLATION_CONFIG,
-      private keepI18nAttrs: boolean = false, private i18nLegacyMessageIdFormat: string = '') {}
+      private keepI18nAttrs = false, private enableI18nLegacyMessageIdFormat = false) {}
 
   private _generateI18nMessage(
-      nodes: html.Node[], meta: string|i18n.AST = '',
-      visitNodeFn?: (html: html.Node, i18n: i18n.Node) => void): i18n.Message {
-    const parsed: I18nMeta =
-        typeof meta === 'string' ? parseI18nMeta(meta) : metaFromI18nMessage(meta as i18n.Message);
-    const message = this._createI18nMessage(
-        nodes, parsed.meaning || '', parsed.description || '', parsed.customId || '', visitNodeFn);
-    if (!message.id) {
-      // generate (or restore) message id if not specified in template
-      message.id = typeof meta !== 'string' && (meta as i18n.Message).id || decimalDigest(message);
-    }
-
-    if (this.i18nLegacyMessageIdFormat === 'xlf') {
-      message.legacyId = computeDigest(message);
-    } else if (
-        this.i18nLegacyMessageIdFormat === 'xlf2' || this.i18nLegacyMessageIdFormat === 'xmb') {
-      message.legacyId = computeDecimalDigest(message);
-    } else if (typeof meta !== 'string') {
-      // This occurs if we are doing the 2nd pass after whitespace removal
-      // In that case we want to reuse the legacy message generated in the 1st pass
-      // See `parseTemplate()` in `packages/compiler/src/render3/view/template.ts`
-      message.legacyId = (meta as i18n.Message).legacyId;
-    }
-
+      nodes: html.Node[], meta: string|i18n.I18nMeta = '',
+      visitNodeFn?: VisitNodeFn): i18n.Message {
+    const {meaning, description, customId} = this._parseMetadata(meta);
+    const message = this._createI18nMessage(nodes, meaning, description, customId, visitNodeFn);
+    this._setMessageId(message, meta);
+    this._setLegacyIds(message, meta);
     return message;
   }
 
-  visitElement(element: html.Element, context: any): any {
+  visitElement(element: html.Element): any {
     if (hasI18nAttrs(element)) {
+      this.hasI18nMeta = true;
       const attrs: html.Attribute[] = [];
       const attrsMeta: {[key: string]: string} = {};
 
@@ -110,13 +108,14 @@ export class I18nMetaVisitor implements html.Visitor {
         element.attrs = attrs;
       }
     }
-    html.visitAll(this, element.children);
+    html.visitAll(this, element.children, element.i18n);
     return element;
   }
 
-  visitExpansion(expansion: html.Expansion, context: any): any {
+  visitExpansion(expansion: html.Expansion, currentMessage: i18n.Message|undefined): any {
     let message;
     const meta = expansion.i18n;
+    this.hasI18nMeta = true;
     if (meta instanceof i18n.IcuPlaceholder) {
       // set ICU placeholder name (e.g. "ICU_1"),
       // generated while processing root element contents,
@@ -126,27 +125,66 @@ export class I18nMetaVisitor implements html.Visitor {
       const icu = icuFromI18nMessage(message);
       icu.name = name;
     } else {
-      // when ICU is a root level translation
-      message = this._generateI18nMessage([expansion], meta);
+      // ICU is a top level message, try to use metadata from container element if provided via
+      // `context` argument. Note: context may not be available for standalone ICUs (without
+      // wrapping element), so fallback to ICU metadata in this case.
+      message = this._generateI18nMessage([expansion], currentMessage || meta);
     }
     expansion.i18n = message;
     return expansion;
   }
 
-  visitText(text: html.Text, context: any): any { return text; }
-  visitAttribute(attribute: html.Attribute, context: any): any { return attribute; }
-  visitComment(comment: html.Comment, context: any): any { return comment; }
-  visitExpansionCase(expansionCase: html.ExpansionCase, context: any): any { return expansionCase; }
-}
+  visitText(text: html.Text): any { return text; }
+  visitAttribute(attribute: html.Attribute): any { return attribute; }
+  visitComment(comment: html.Comment): any { return comment; }
+  visitExpansionCase(expansionCase: html.ExpansionCase): any { return expansionCase; }
 
-export function metaFromI18nMessage(message: i18n.Message, id: string | null = null): I18nMeta {
-  return {
-    id: typeof id === 'string' ? id : message.id || '',
-    customId: message.customId,
-    legacyId: message.legacyId,
-    meaning: message.meaning || '',
-    description: message.description || ''
-  };
+  /**
+   * Parse the general form `meta` passed into extract the explicit metadata needed to create a
+   * `Message`.
+   *
+   * There are three possibilities for the `meta` variable
+   * 1) a string from an `i18n` template attribute: parse it to extract the metadata values.
+   * 2) a `Message` from a previous processing pass: reuse the metadata values in the message.
+   * 4) other: ignore this and just process the message metadata as normal
+   *
+   * @param meta the bucket that holds information about the message
+   * @returns the parsed metadata.
+   */
+  private _parseMetadata(meta: string|i18n.I18nMeta): I18nMeta {
+    return typeof meta === 'string' ? parseI18nMeta(meta) :
+                                      meta instanceof i18n.Message ? meta : {};
+  }
+
+  /**
+   * Generate (or restore) message id if not specified already.
+   */
+  private _setMessageId(message: i18n.Message, meta: string|i18n.I18nMeta): void {
+    if (!message.id) {
+      message.id = meta instanceof i18n.Message && meta.id || decimalDigest(message);
+    }
+  }
+
+  /**
+   * Update the `message` with a `legacyId` if necessary.
+   *
+   * @param message the message whose legacy id should be set
+   * @param meta information about the message being processed
+   */
+  private _setLegacyIds(message: i18n.Message, meta: string|i18n.I18nMeta): void {
+    if (this.enableI18nLegacyMessageIdFormat) {
+      message.legacyIds = [computeDigest(message), computeDecimalDigest(message)];
+    } else if (typeof meta !== 'string') {
+      // This occurs if we are doing the 2nd pass after whitespace removal (see `parseTemplate()` in
+      // `packages/compiler/src/render3/view/template.ts`).
+      // In that case we want to reuse the legacy message generated in the 1st pass (see
+      // `setI18nRefs()`).
+      const previousMessage = meta instanceof i18n.Message ?
+          meta :
+          meta instanceof i18n.IcuPlaceholder ? meta.previousMessage : undefined;
+      message.legacyIds = previousMessage ? previousMessage.legacyIds : [];
+    }
+  }
 }
 
 /** I18n separators for metadata **/
@@ -163,11 +201,12 @@ const I18N_ID_SEPARATOR = '@@';
  * @param meta String that represents i18n meta
  * @returns Object with id, meaning and description fields
  */
-export function parseI18nMeta(meta?: string): I18nMeta {
+export function parseI18nMeta(meta: string = ''): I18nMeta {
   let customId: string|undefined;
   let meaning: string|undefined;
   let description: string|undefined;
 
+  meta = meta.trim();
   if (meta) {
     const idIndex = meta.indexOf(I18N_ID_SEPARATOR);
     const descIndex = meta.indexOf(I18N_MEANING_SEPARATOR);
@@ -182,45 +221,6 @@ export function parseI18nMeta(meta?: string): I18nMeta {
   return {customId, meaning, description};
 }
 
-/**
- * Serialize the given `meta` and `messagePart` a string that can be used in a `$localize`
- * tagged string. The format of the metadata is the same as that parsed by `parseI18nMeta()`.
- *
- * @param meta The metadata to serialize
- * @param messagePart The first part of the tagged string
- */
-export function serializeI18nHead(meta: I18nMeta, messagePart: string): string {
-  let metaBlock = meta.description || '';
-  if (meta.meaning) {
-    metaBlock = `${meta.meaning}|${metaBlock}`;
-  }
-  if (meta.customId || meta.legacyId) {
-    metaBlock = `${metaBlock}@@${meta.customId || meta.legacyId}`;
-  }
-  if (metaBlock === '') {
-    // There is no metaBlock, so we must ensure that any starting colon is escaped.
-    return escapeStartingColon(messagePart);
-  } else {
-    return `:${escapeColons(metaBlock)}:${messagePart}`;
-  }
-}
-
-/**
- * Serialize the given `placeholderName` and `messagePart` into strings that can be used in a
- * `$localize` tagged string.
- *
- * @param placeholderName The placeholder name to serialize
- * @param messagePart The following message string after this placeholder
- */
-export function serializeI18nTemplatePart(placeholderName: string, messagePart: string): string {
-  if (placeholderName === '') {
-    // There is no placeholder name block, so we must ensure that any starting colon is escaped.
-    return escapeStartingColon(messagePart);
-  } else {
-    return `:${placeholderName}:${messagePart}`;
-  }
-}
-
 // Converts i18n meta information for a message (id, description, meaning)
 // to a JsDoc statement formatted as expected by the Closure compiler.
 export function i18nMetaToDocStmt(meta: I18nMeta): o.JSDocCommentStmt|null {
@@ -232,12 +232,4 @@ export function i18nMetaToDocStmt(meta: I18nMeta): o.JSDocCommentStmt|null {
     tags.push({tagName: o.JSDocTagName.Meaning, text: meta.meaning});
   }
   return tags.length == 0 ? null : new o.JSDocCommentStmt(tags);
-}
-
-export function escapeStartingColon(str: string): string {
-  return str.replace(/^:/, '\\:');
-}
-
-export function escapeColons(str: string): string {
-  return str.replace(/:/g, '\\:');
 }

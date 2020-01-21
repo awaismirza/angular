@@ -74,11 +74,6 @@ export class CachedFileSystem implements FileSystem {
     this.existsCache.set(to, true);
   }
 
-  mkdir(path: AbsoluteFsPath): void {
-    this.delegate.mkdir(path);
-    this.existsCache.set(path, true);
-  }
-
   ensureDir(path: AbsoluteFsPath): void {
     this.delegate.ensureDir(path);
     while (!this.isRoot(path)) {
@@ -104,6 +99,7 @@ export class CachedFileSystem implements FileSystem {
   // The following methods simply call through to the delegate.
   readdir(path: AbsoluteFsPath): PathSegment[] { return this.delegate.readdir(path); }
   pwd(): AbsoluteFsPath { return this.delegate.pwd(); }
+  chdir(path: AbsoluteFsPath): void { this.delegate.chdir(path); }
   extname(path: AbsoluteFsPath|PathSegment): string { return this.delegate.extname(path); }
   isCaseSensitive(): boolean { return this.delegate.isCaseSensitive(); }
   isRoot(path: AbsoluteFsPath): boolean { return this.delegate.isRoot(path); }

@@ -6,17 +6,18 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {AST, Attribute, BoundDirectivePropertyAst, BoundEventAst, ElementAst, TemplateAstPath, findNode, tokenReference} from '@angular/compiler';
-import {getExpressionScope} from '@angular/compiler-cli/src/language_services';
+import {AST, Attribute, BoundDirectivePropertyAst, BoundEventAst, CompileTypeSummary, CssSelector, DirectiveAst, ElementAst, EmbeddedTemplateAst, RecursiveTemplateAstVisitor, SelectorMatcher, TemplateAst, TemplateAstPath, templateVisitAll, tokenReference} from '@angular/compiler';
 
 import {AstResult} from './common';
+import {getExpressionScope} from './expression_diagnostics';
 import {getExpressionSymbol} from './expressions';
 import {Definition, DirectiveKind, Span, Symbol} from './types';
-import {diagnosticInfoFromTemplateInfo, findTemplateAstAt, inSpan, offsetSpan, spanOf} from './utils';
+import {diagnosticInfoFromTemplateInfo, findTemplateAstAt, getPathToNodeAtPosition, inSpan, offsetSpan, spanOf} from './utils';
 
 export interface SymbolInfo {
   symbol: Symbol;
   span: Span;
+  compileTypeSummary: CompileTypeSummary|undefined;
 }
 
 /**
@@ -27,6 +28,7 @@ export interface SymbolInfo {
 export function locateSymbol(info: AstResult, position: number): SymbolInfo|undefined {
   const templatePosition = position - info.template.span.start;
   const path = findTemplateAstAt(info.templateAst, templatePosition);
+  let compileTypeSummary: CompileTypeSummary|undefined = undefined;
   if (path.tail) {
     let symbol: Symbol|undefined = undefined;
     let span: Span|undefined = undefined;
@@ -35,13 +37,12 @@ export function locateSymbol(info: AstResult, position: number): SymbolInfo|unde
       if (attribute) {
         if (inSpan(templatePosition, spanOf(attribute.valueSpan))) {
           const dinfo = diagnosticInfoFromTemplateInfo(info);
-          const scope = getExpressionScope(dinfo, path, inEvent);
+          const scope = getExpressionScope(dinfo, path);
           if (attribute.valueSpan) {
-            const expressionOffset = attribute.valueSpan.start.offset;
-            const result = getExpressionSymbol(
-                scope, ast, templatePosition - expressionOffset, info.template.query);
+            const result = getExpressionSymbol(scope, ast, templatePosition, info.template.query);
             if (result) {
               symbol = result.symbol;
+              const expressionOffset = attribute.valueSpan.start.offset;
               span = offsetSpan(result.span, expressionOffset);
             }
           }
@@ -57,7 +58,8 @@ export function locateSymbol(info: AstResult, position: number): SymbolInfo|unde
           visitElement(ast) {
             const component = ast.directives.find(d => d.directive.isComponent);
             if (component) {
-              symbol = info.template.query.getTypeSymbol(component.directive.type.reference);
+              compileTypeSummary = component.directive;
+              symbol = info.template.query.getTypeSymbol(compileTypeSummary.type.reference);
               symbol = symbol && new OverrideKindSymbol(symbol, DirectiveKind.COMPONENT);
               span = spanOf(ast);
             } else {
@@ -65,7 +67,8 @@ export function locateSymbol(info: AstResult, position: number): SymbolInfo|unde
               const directive = ast.directives.find(
                   d => d.directive.selector != null && d.directive.selector.indexOf(ast.name) >= 0);
               if (directive) {
-                symbol = info.template.query.getTypeSymbol(directive.directive.type.reference);
+                compileTypeSummary = directive.directive;
+                symbol = info.template.query.getTypeSymbol(compileTypeSummary.type.reference);
                 symbol = symbol && new OverrideKindSymbol(symbol, DirectiveKind.DIRECTIVE);
                 span = spanOf(ast);
               }
@@ -84,14 +87,33 @@ export function locateSymbol(info: AstResult, position: number): SymbolInfo|unde
             }
           },
           visitElementProperty(ast) { attributeValueSymbol(ast.value); },
-          visitAttr(ast) {},
+          visitAttr(ast) {
+            const element = path.head;
+            if (!element || !(element instanceof ElementAst)) return;
+            // Create a mapping of all directives applied to the element from their selectors.
+            const matcher = new SelectorMatcher<DirectiveAst>();
+            for (const dir of element.directives) {
+              if (!dir.directive.selector) continue;
+              matcher.addSelectables(CssSelector.parse(dir.directive.selector), dir);
+            }
+
+            // See if this attribute matches the selector of any directive on the element.
+            const attributeSelector = `[${ast.name}=${ast.value}]`;
+            const parsedAttribute = CssSelector.parse(attributeSelector);
+            if (!parsedAttribute.length) return;
+            matcher.match(parsedAttribute[0], (_, directive) => {
+              symbol = info.template.query.getTypeSymbol(directive.directive.type.reference);
+              symbol = symbol && new OverrideKindSymbol(symbol, DirectiveKind.DIRECTIVE);
+              span = spanOf(ast);
+            });
+          },
           visitBoundText(ast) {
             const expressionPosition = templatePosition - ast.sourceSpan.start.offset;
             if (inSpan(expressionPosition, ast.value.span)) {
               const dinfo = diagnosticInfoFromTemplateInfo(info);
-              const scope = getExpressionScope(dinfo, path, /* includeEvent */ false);
+              const scope = getExpressionScope(dinfo, path);
               const result =
-                  getExpressionSymbol(scope, ast.value, expressionPosition, info.template.query);
+                  getExpressionSymbol(scope, ast.value, templatePosition, info.template.query);
               if (result) {
                 symbol = result.symbol;
                 span = offsetSpan(result.span, ast.sourceSpan.start.offset);
@@ -100,41 +122,85 @@ export function locateSymbol(info: AstResult, position: number): SymbolInfo|unde
           },
           visitText(ast) {},
           visitDirective(ast) {
-            symbol = info.template.query.getTypeSymbol(ast.directive.type.reference);
+            compileTypeSummary = ast.directive;
+            symbol = info.template.query.getTypeSymbol(compileTypeSummary.type.reference);
             span = spanOf(ast);
           },
           visitDirectiveProperty(ast) {
             if (!attributeValueSymbol(ast.value)) {
-              symbol = findInputBinding(info, path, ast);
+              symbol = findInputBinding(info, templatePosition, ast);
               span = spanOf(ast);
             }
           }
         },
         null);
     if (symbol && span) {
-      return {symbol, span: offsetSpan(span, info.template.span.start)};
+      return {symbol, span: offsetSpan(span, info.template.span.start), compileTypeSummary};
     }
   }
 }
 
 function findAttribute(info: AstResult, position: number): Attribute|undefined {
   const templatePosition = position - info.template.span.start;
-  const path = findNode(info.htmlAst, templatePosition);
+  const path = getPathToNodeAtPosition(info.htmlAst, templatePosition);
   return path.first(Attribute);
 }
 
+// TODO: remove this function after the path includes 'DirectiveAst'.
+// Find the directive that corresponds to the specified 'binding'
+// at the specified 'position' in the 'ast'.
+function findParentOfBinding(
+    ast: TemplateAst[], binding: BoundDirectivePropertyAst, position: number): DirectiveAst|
+    undefined {
+  let res: DirectiveAst|undefined;
+  const visitor = new class extends RecursiveTemplateAstVisitor {
+    visit(ast: TemplateAst): any {
+      const span = spanOf(ast);
+      if (!inSpan(position, span)) {
+        // Returning a value here will result in the children being skipped.
+        return true;
+      }
+    }
+
+    visitEmbeddedTemplate(ast: EmbeddedTemplateAst, context: any): any {
+      return this.visitChildren(context, visit => {
+        visit(ast.directives);
+        visit(ast.children);
+      });
+    }
+
+    visitElement(ast: ElementAst, context: any): any {
+      return this.visitChildren(context, visit => {
+        visit(ast.directives);
+        visit(ast.children);
+      });
+    }
+
+    visitDirective(ast: DirectiveAst) {
+      const result = this.visitChildren(ast, visit => { visit(ast.inputs); });
+      return result;
+    }
+
+    visitDirectiveProperty(ast: BoundDirectivePropertyAst, context: DirectiveAst) {
+      if (ast === binding) {
+        res = context;
+      }
+    }
+  };
+  templateVisitAll(visitor, ast);
+  return res;
+}
+
 function findInputBinding(
-    info: AstResult, path: TemplateAstPath, binding: BoundDirectivePropertyAst): Symbol|undefined {
-  const element = path.first(ElementAst);
-  if (element) {
-    for (const directive of element.directives) {
-      const invertedInput = invertMap(directive.directive.inputs);
-      const fieldName = invertedInput[binding.templateName];
-      if (fieldName) {
-        const classSymbol = info.template.query.getTypeSymbol(directive.directive.type.reference);
-        if (classSymbol) {
-          return classSymbol.members().get(fieldName);
-        }
+    info: AstResult, position: number, binding: BoundDirectivePropertyAst): Symbol|undefined {
+  const directiveAst = findParentOfBinding(info.templateAst, binding, position);
+  if (directiveAst) {
+    const invertedInput = invertMap(directiveAst.directive.inputs);
+    const fieldName = invertedInput[binding.templateName];
+    if (fieldName) {
+      const classSymbol = info.template.query.getTypeSymbol(directiveAst.directive.type.reference);
+      if (classSymbol) {
+        return classSymbol.members().get(fieldName);
       }
     }
   }
@@ -189,6 +255,8 @@ class OverrideKindSymbol implements Symbol {
 
   get definition(): Definition { return this.sym.definition; }
 
+  get documentation(): ts.SymbolDisplayPart[] { return this.sym.documentation; }
+
   members() { return this.sym.members(); }
 
   signatures() { return this.sym.signatures(); }
@@ -196,4 +264,6 @@ class OverrideKindSymbol implements Symbol {
   selectSignature(types: Symbol[]) { return this.sym.selectSignature(types); }
 
   indexed(argument: Symbol) { return this.sym.indexed(argument); }
+
+  typeArguments(): Symbol[]|undefined { return this.sym.typeArguments(); }
 }

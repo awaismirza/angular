@@ -7,11 +7,11 @@
  */
 import {bindingUpdated} from '../bindings';
 import {SanitizerFn} from '../interfaces/sanitization';
-import {BINDING_INDEX, TVIEW} from '../interfaces/view';
-import {getLView, getSelectedIndex} from '../state';
+import {TVIEW} from '../interfaces/view';
+import {getLView, getSelectedIndex, nextBindingIndex} from '../state';
 import {NO_CHANGE} from '../tokens';
 
-import {TsickleIssue1009, elementPropertyInternal, loadComponentRenderer, storePropertyBindingMetadata} from './shared';
+import {elementPropertyInternal, loadComponentRenderer, storePropertyBindingMetadata} from './shared';
 
 /**
  * Update a property on a host element. Only applies to native node properties, not inputs.
@@ -28,9 +28,9 @@ import {TsickleIssue1009, elementPropertyInternal, loadComponentRenderer, storeP
  * @codeGenApi
  */
 export function ɵɵhostProperty<T>(
-    propName: string, value: T, sanitizer?: SanitizerFn | null): TsickleIssue1009 {
+    propName: string, value: T, sanitizer?: SanitizerFn | null): typeof ɵɵhostProperty {
   const lView = getLView();
-  const bindingIndex = lView[BINDING_INDEX]++;
+  const bindingIndex = nextBindingIndex();
   if (bindingUpdated(lView, bindingIndex, value)) {
     const nodeIndex = getSelectedIndex();
     elementPropertyInternal(lView, nodeIndex, propName, value, sanitizer, true);
@@ -62,9 +62,10 @@ export function ɵɵhostProperty<T>(
  * @codeGenApi
  */
 export function ɵɵupdateSyntheticHostBinding<T>(
-    propName: string, value: T | NO_CHANGE, sanitizer?: SanitizerFn | null): TsickleIssue1009 {
+    propName: string, value: T | NO_CHANGE,
+    sanitizer?: SanitizerFn | null): typeof ɵɵupdateSyntheticHostBinding {
   const lView = getLView();
-  const bindingIndex = lView[BINDING_INDEX]++;
+  const bindingIndex = nextBindingIndex();
   if (bindingUpdated(lView, bindingIndex, value)) {
     const nodeIndex = getSelectedIndex();
     elementPropertyInternal(

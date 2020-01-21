@@ -7,10 +7,10 @@
  */
 import {bindingUpdated} from '../bindings';
 import {SanitizerFn} from '../interfaces/sanitization';
-import {BINDING_INDEX} from '../interfaces/view';
-import {getLView, getSelectedIndex} from '../state';
+import {TVIEW} from '../interfaces/view';
+import {getLView, getSelectedIndex, nextBindingIndex} from '../state';
 
-import {TsickleIssue1009, elementAttributeInternal} from './shared';
+import {elementAttributeInternal, storePropertyBindingMetadata} from './shared';
 
 
 
@@ -29,10 +29,14 @@ import {TsickleIssue1009, elementAttributeInternal} from './shared';
  */
 export function ɵɵattribute(
     name: string, value: any, sanitizer?: SanitizerFn | null,
-    namespace?: string): TsickleIssue1009 {
+    namespace?: string): typeof ɵɵattribute {
   const lView = getLView();
-  if (bindingUpdated(lView, lView[BINDING_INDEX]++, value)) {
-    elementAttributeInternal(getSelectedIndex(), name, value, lView, sanitizer, namespace);
+  const bindingIndex = nextBindingIndex();
+  if (bindingUpdated(lView, bindingIndex, value)) {
+    const nodeIndex = getSelectedIndex();
+    elementAttributeInternal(nodeIndex, name, value, lView, sanitizer, namespace);
+    ngDevMode &&
+        storePropertyBindingMetadata(lView[TVIEW].data, nodeIndex, 'attr.' + name, bindingIndex);
   }
   return ɵɵattribute;
 }

@@ -21,8 +21,7 @@ export function assertTNodeForLView(tNode: TNode, lView: LView) {
 
 export function assertComponentType(
     actual: any,
-    msg: string =
-        'Type passed in is not ComponentType, it does not have \'ngComponentDef\' property.') {
+    msg: string = 'Type passed in is not ComponentType, it does not have \'ɵcmp\' property.') {
   if (!getComponentDef(actual)) {
     throwError(msg);
   }
@@ -30,8 +29,7 @@ export function assertComponentType(
 
 export function assertNgModuleType(
     actual: any,
-    msg: string =
-        'Type passed in is not NgModuleType, it does not have \'ngModuleDef\' property.') {
+    msg: string = 'Type passed in is not NgModuleType, it does not have \'ɵmod\' property.') {
   if (!getNgModuleDef(actual)) {
     throwError(msg);
   }
@@ -70,7 +68,18 @@ export function assertLView(value: any) {
   assertEqual(isLView(value), true, 'Expecting LView');
 }
 
-export function assertFirstTemplatePass(tView: TView, errMessage?: string) {
+export function assertFirstCreatePass(tView: TView, errMessage?: string) {
   assertEqual(
-      tView.firstTemplatePass, true, errMessage || 'Should only be called in first template pass.');
+      tView.firstCreatePass, true, errMessage || 'Should only be called in first create pass.');
+}
+
+/**
+ * This is a basic sanity check that an object is probably a directive def. DirectiveDef is
+ * an interface, so we can't do a direct instanceof check.
+ */
+export function assertDirectiveDef(obj: any) {
+  if (obj.type === undefined || obj.selectors == undefined || obj.inputs === undefined) {
+    throwError(
+        `Expected a DirectiveDef/ComponentDef and this object does not seem to have the expected shape.`);
+  }
 }

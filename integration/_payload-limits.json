@@ -2,36 +2,56 @@
   "cli-hello-world": {
     "master": {
       "uncompressed": {
-        "runtime": 1497,
-        "main": 154699,
-        "polyfills": 45399
+        "runtime-es2015": 1485,
+        "main-es2015": 141476,
+        "polyfills-es2015": 36808
       }
     }
   },
   "cli-hello-world-ivy-minimal": {
     "master": {
       "uncompressed": {
-        "runtime": 1440,
-        "main": 13415,
-        "polyfills": 45340
+        "runtime-es2015": 1485,
+        "main-es2015": 15783,
+        "polyfills-es2015": 36808
       }
     }
   },
   "cli-hello-world-ivy-compat": {
     "master": {
       "uncompressed": {
-        "runtime": 1440,
-        "main": 123904,
-        "polyfills": 45340
+        "runtime-es2015": 1485,
+        "main-es2015": 147610,
+        "polyfills-es2015": 36808
       }
     }
   },
   "cli-hello-world-ivy-i18n": {
     "master": {
       "uncompressed": {
-        "runtime": 1440,
-        "main": 141209,
-        "polyfills": 45949
+        "runtime-es2015": 1485,
+        "main-es2015": 137141,
+        "polyfills-es2015": 37494
+      }
+    }
+  },
+  "cli-hello-world-lazy": {
+    "master": {
+      "uncompressed": {
+        "runtime-es2015": 2289,
+        "main-es2015": 267182,
+        "polyfills-es2015": 36808,
+        "5-es2015": 751
+      }
+    }
+  },
+  "cli-hello-world-lazy-rollup": {
+    "master": {
+      "uncompressed": {
+        "runtime-es2015": 2289,
+        "main-es2015": 226288,
+        "polyfills-es2015": 36808,
+        "5-es2015": 779
       }
     }
   },
@@ -40,7 +60,7 @@
       "uncompressed": {
         "bundle": "TODO(i): temporarily increase the payload size limit from 105779 - this is due to a closure issue related to ESM reexports that still needs to be investigated",
         "bundle": "TODO(i): we should define ngDevMode to false in Closure, but --define only works in the global scope.",
-        "bundle": 177447
+        "bundle": 176433
       }
     }
   }

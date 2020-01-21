@@ -11,10 +11,8 @@ import * as ts from 'typescript';
 import {ClassDeclaration, ClassMember, ClassMemberKind, Declaration, Decorator, FunctionDefinition, Parameter, TsHelperFn, isNamedVariableDeclaration, reflectObjectLiteral} from '../../../src/ngtsc/reflection';
 import {getNameText, hasNameIdentifier, stripDollarSuffix} from '../utils';
 
-import {Esm2015ReflectionHost, ParamInfo, getPropertyValueFromSymbol, isAssignmentStatement} from './esm2015_host';
+import {Esm2015ReflectionHost, ParamInfo, getPropertyValueFromSymbol, isAssignment, isAssignmentStatement} from './esm2015_host';
 import {NgccClassSymbol} from './ngcc_host';
-
-
 
 /**
  * ESM5 packages contain ECMAScript IIFE functions that act like classes. For example:
@@ -86,6 +84,39 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
     return iife.parent.arguments[0];
   }
 
+  getInternalNameOfClass(clazz: ClassDeclaration): ts.Identifier {
+    const innerClass = this.getInnerFunctionDeclarationFromClassDeclaration(clazz);
+    if (innerClass === undefined) {
+      throw new Error(
+          `getInternalNameOfClass() called on a non-ES5 class: expected ${clazz.name.text} to have an inner class declaration`);
+    }
+    if (innerClass.name === undefined) {
+      throw new Error(
+          `getInternalNameOfClass() called on a class with an anonymous inner declaration: expected a name on:\n${innerClass.getText()}`);
+    }
+    return innerClass.name;
+  }
+
+  getAdjacentNameOfClass(clazz: ClassDeclaration): ts.Identifier {
+    return this.getInternalNameOfClass(clazz);
+  }
+
+  getEndOfClass(classSymbol: NgccClassSymbol): ts.Node {
+    const iifeBody = getIifeBody(classSymbol.declaration.valueDeclaration);
+    if (!iifeBody) {
+      throw new Error(
+          `Compiled class declaration is not inside an IIFE: ${classSymbol.name} in ${classSymbol.declaration.valueDeclaration.getSourceFile().fileName}`);
+    }
+
+    const returnStatementIndex = iifeBody.statements.findIndex(ts.isReturnStatement);
+    if (returnStatementIndex === -1) {
+      throw new Error(
+          `Compiled class wrapper IIFE does not have a return statement: ${classSymbol.name} in ${classSymbol.declaration.valueDeclaration.getSourceFile().fileName}`);
+    }
+
+    // Return the statement before the IIFE return statement
+    return iifeBody.statements[returnStatementIndex - 1];
+  }
   /**
    * In ES5, the implementation of a class is a function expression that is hidden inside an IIFE,
    * whose value is assigned to a variable (which represents the class to the rest of the program).
@@ -137,7 +168,7 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
     }
 
     const outerDeclaration = getClassDeclarationFromInnerFunctionDeclaration(declaration);
-    if (outerDeclaration === undefined || !hasNameIdentifier(outerDeclaration)) {
+    if (outerDeclaration === null || !hasNameIdentifier(outerDeclaration)) {
       return undefined;
     }
 
@@ -162,12 +193,23 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
    * otherwise.
    */
   getDeclarationOfIdentifier(id: ts.Identifier): Declaration|null {
-    // Get the identifier for the outer class node (if any).
-    const outerClassNode = getClassDeclarationFromInnerFunctionDeclaration(id.parent);
-    const declaration = super.getDeclarationOfIdentifier(outerClassNode ? outerClassNode.name : id);
+    const superDeclaration = super.getDeclarationOfIdentifier(id);
 
-    if (!declaration || declaration.node === null || !ts.isVariableDeclaration(declaration.node) ||
-        declaration.node.initializer !== undefined ||
+    if (superDeclaration === null || superDeclaration.node === null) {
+      return superDeclaration;
+    }
+
+    // Get the identifier for the outer class node (if any).
+    const outerClassNode = getClassDeclarationFromInnerFunctionDeclaration(superDeclaration.node);
+    const declaration = outerClassNode !== null ?
+        super.getDeclarationOfIdentifier(outerClassNode.name) :
+        superDeclaration;
+
+    if (!declaration || declaration.node === null) {
+      return declaration;
+    }
+
+    if (!ts.isVariableDeclaration(declaration.node) || declaration.node.initializer !== undefined ||
         // VariableDeclaration => VariableDeclarationList => VariableStatement => IIFE Block
         !ts.isBlock(declaration.node.parent.parent.parent)) {
       return declaration;
@@ -528,55 +570,68 @@ function readPropertyFunctionExpression(object: ts.ObjectLiteralExpression, name
  * @returns the outer variable declaration or `undefined` if it is not a "class".
  */
 function getClassDeclarationFromInnerFunctionDeclaration(node: ts.Node):
-    ClassDeclaration<ts.VariableDeclaration>|undefined {
+    ClassDeclaration<ts.VariableDeclaration>|null {
   if (ts.isFunctionDeclaration(node)) {
     // It might be the function expression inside the IIFE. We need to go 5 levels up...
 
     // 1. IIFE body.
     let outerNode = node.parent;
-    if (!outerNode || !ts.isBlock(outerNode)) return undefined;
+    if (!outerNode || !ts.isBlock(outerNode)) return null;
 
     // 2. IIFE function expression.
     outerNode = outerNode.parent;
-    if (!outerNode || !ts.isFunctionExpression(outerNode)) return undefined;
+    if (!outerNode || !ts.isFunctionExpression(outerNode)) return null;
 
     // 3. IIFE call expression.
     outerNode = outerNode.parent;
-    if (!outerNode || !ts.isCallExpression(outerNode)) return undefined;
+    if (!outerNode || !ts.isCallExpression(outerNode)) return null;
 
     // 4. Parenthesis around IIFE.
     outerNode = outerNode.parent;
-    if (!outerNode || !ts.isParenthesizedExpression(outerNode)) return undefined;
+    if (!outerNode || !ts.isParenthesizedExpression(outerNode)) return null;
 
     // 5. Outer variable declaration.
     outerNode = outerNode.parent;
-    if (!outerNode || !ts.isVariableDeclaration(outerNode)) return undefined;
+    if (!outerNode || !ts.isVariableDeclaration(outerNode)) return null;
 
     // Finally, ensure that the variable declaration has a `name` identifier.
-    return hasNameIdentifier(outerNode) ? outerNode : undefined;
+    return hasNameIdentifier(outerNode) ? outerNode : null;
   }
 
-  return undefined;
+  return null;
 }
 
 export function getIifeBody(declaration: ts.Declaration): ts.Block|undefined {
-  if (!ts.isVariableDeclaration(declaration) || !declaration.initializer ||
-      !ts.isParenthesizedExpression(declaration.initializer)) {
+  if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) {
     return undefined;
   }
-  const call = declaration.initializer;
-  return ts.isCallExpression(call.expression) &&
-          ts.isFunctionExpression(call.expression.expression) ?
-      call.expression.expression.body :
-      undefined;
+
+  const call = stripParentheses(declaration.initializer);
+  if (!ts.isCallExpression(call)) {
+    return undefined;
+  }
+
+  const fn = stripParentheses(call.expression);
+  if (!ts.isFunctionExpression(fn)) {
+    return undefined;
+  }
+
+  return fn.body;
 }
 
 function getReturnIdentifier(body: ts.Block): ts.Identifier|undefined {
   const returnStatement = body.statements.find(ts.isReturnStatement);
-  return returnStatement && returnStatement.expression &&
-          ts.isIdentifier(returnStatement.expression) ?
-      returnStatement.expression :
-      undefined;
+  if (!returnStatement || !returnStatement.expression) {
+    return undefined;
+  }
+  if (ts.isIdentifier(returnStatement.expression)) {
+    return returnStatement.expression;
+  }
+  if (isAssignment(returnStatement.expression) &&
+      ts.isIdentifier(returnStatement.expression.left)) {
+    return returnStatement.expression.left;
+  }
+  return undefined;
 }
 
 function getReturnStatement(declaration: ts.Expression | undefined): ts.ReturnStatement|undefined {
@@ -599,10 +654,13 @@ function getTsHelperFn(node: ts.NamedDeclaration): TsHelperFn|null {
       stripDollarSuffix(node.name.text) :
       null;
 
-  if (name === '__spread') {
-    return TsHelperFn.Spread;
-  } else {
-    return null;
+  switch (name) {
+    case '__spread':
+      return TsHelperFn.Spread;
+    case '__spreadArrays':
+      return TsHelperFn.SpreadArrays;
+    default:
+      return null;
   }
 }
 
@@ -786,4 +844,8 @@ function isUndefinedComparison(expression: ts.Expression): expression is ts.Expr
   return ts.isBinaryExpression(expression) &&
       expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
       ts.isVoidExpression(expression.right) && ts.isIdentifier(expression.left);
+}
+
+export function stripParentheses(node: ts.Node): ts.Node {
+  return ts.isParenthesizedExpression(node) ? node.expression : node;
 }

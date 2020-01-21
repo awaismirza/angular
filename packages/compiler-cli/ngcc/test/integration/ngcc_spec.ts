@@ -19,6 +19,7 @@ import {EntryPointJsonProperty, EntryPointPackageJson, SUPPORTED_FORMAT_PROPERTI
 import {Transformer} from '../../src/packages/transformer';
 import {DirectPackageJsonUpdater, PackageJsonUpdater} from '../../src/writing/package_json_updater';
 import {MockLogger} from '../helpers/mock_logger';
+import {compileIntoApf, compileIntoFlatEs5Package} from './util';
 
 
 const testFiles = loadStandardTestFiles({fakeCore: false, rxjs: true});
@@ -109,6 +110,236 @@ runInEachFileSystem(() => {
 
       expect(loadPackage('@angular/core').__processed_by_ivy_ngcc__).toBeUndefined();
       expect(loadPackage('local-package', _('/dist')).__processed_by_ivy_ngcc__).toBeUndefined();
+    });
+
+    it('should generate correct metadata for decorated getter/setter properties', () => {
+      compileIntoFlatEs5Package('test-package', {
+        '/index.ts': `
+          import {Directive, Input, NgModule} from '@angular/core';
+
+          @Directive({selector: '[foo]'})
+          export class FooDirective {
+            @Input() get bar() { return 'bar'; }
+            set bar(value: string) {}
+          }
+
+          @NgModule({
+            declarations: [FooDirective],
+          })
+          export class FooModule {}
+        `,
+      });
+
+      mainNgcc({
+        basePath: '/node_modules',
+        targetEntryPointPath: 'test-package',
+        propertiesToConsider: ['main'],
+      });
+
+      const jsContents = fs.readFile(_(`/node_modules/test-package/index.js`)).replace(/\s+/g, ' ');
+      expect(jsContents)
+          .toContain(
+              '/*@__PURE__*/ (function () { ɵngcc0.ɵsetClassMetadata(FooDirective, ' +
+              '[{ type: Directive, args: [{ selector: \'[foo]\' }] }], ' +
+              'function () { return []; }, ' +
+              '{ bar: [{ type: Input }] }); })();');
+    });
+
+    it('should not add `const` in ES5 generated code', () => {
+      compileIntoFlatEs5Package('test-package', {
+        '/index.ts': `
+          import {Directive, Input, NgModule} from '@angular/core';
+
+          @Directive({
+            selector: '[foo]',
+            host: {bar: ''},
+          })
+          export class FooDirective {
+          }
+
+          @NgModule({
+            declarations: [FooDirective],
+          })
+          export class FooModule {}
+        `,
+      });
+
+      mainNgcc({
+        basePath: '/node_modules',
+        targetEntryPointPath: 'test-package',
+        propertiesToConsider: ['main'],
+      });
+
+      const jsContents = fs.readFile(_(`/node_modules/test-package/index.js`));
+      expect(jsContents).not.toMatch(/\bconst \w+\s*=/);
+      expect(jsContents).toMatch(/\bvar _c0 =/);
+    });
+
+    it('should add ɵfac but not duplicate ɵprov properties on injectables', () => {
+      compileIntoFlatEs5Package('test-package', {
+        '/index.ts': `
+        import {Injectable, ɵɵdefineInjectable} from '@angular/core';
+        export const TestClassToken = 'TestClassToken';
+        @Injectable({providedIn: 'module'})
+        export class TestClass {
+          static ɵprov = ɵɵdefineInjectable({ factory: () => {}, token: TestClassToken, providedIn: "module" });
+        }
+        `,
+      });
+
+      const before = fs.readFile(_(`/node_modules/test-package/index.js`));
+      const originalProp = /ɵprov[^;]+/.exec(before) ![0];
+      mainNgcc({
+        basePath: '/node_modules',
+        targetEntryPointPath: 'test-package',
+        propertiesToConsider: ['main'],
+      });
+      const after = fs.readFile(_(`/node_modules/test-package/index.js`));
+
+      expect(before).toContain(originalProp);
+      expect(countOccurrences(before, 'ɵprov')).toEqual(1);
+      expect(countOccurrences(before, 'ɵfac')).toEqual(0);
+
+      expect(after).toContain(originalProp);
+      expect(countOccurrences(after, 'ɵprov')).toEqual(1);
+      expect(countOccurrences(after, 'ɵfac')).toEqual(1);
+    });
+
+    // This is necessary to ensure XPipeDef.fac is defined when delegated from injectable def
+    it('should always generate factory def (fac) before injectable def (prov)', () => {
+      compileIntoFlatEs5Package('test-package', {
+        '/index.ts': `
+        import {Injectable, Pipe, PipeTransform} from '@angular/core';
+
+        @Injectable()
+        @Pipe({
+          name: 'myTestPipe'
+        })
+        export class TestClass implements PipeTransform {
+          transform(value: any) { return value; }
+        }
+        `,
+      });
+
+      mainNgcc({
+        basePath: '/node_modules',
+        targetEntryPointPath: 'test-package',
+        propertiesToConsider: ['main'],
+      });
+
+      const jsContents = fs.readFile(_(`/node_modules/test-package/index.js`));
+      expect(jsContents)
+          .toContain(
+              `TestClass.ɵfac = function TestClass_Factory(t) { return new (t || TestClass)(); };\n` +
+              `TestClass.ɵpipe = ɵngcc0.ɵɵdefinePipe({ name: "myTestPipe", type: TestClass, pure: true });\n` +
+              `TestClass.ɵprov = ɵngcc0.ɵɵdefineInjectable({`);
+    });
+
+    it('should use the correct type name in typings files when an export has a different name in source files',
+       () => {
+         // We need to make sure that changes to the typings files use the correct name
+         // static ɵprov: ɵngcc0.ɵɵInjectableDef<ɵangular_packages_common_common_a>;
+         mainNgcc({
+           basePath: '/node_modules',
+           targetEntryPointPath: '@angular/common',
+           propertiesToConsider: ['esm2015']
+         });
+
+         // In `@angular/common` the `NgClassR3Impl` class gets exported as something like
+         // `ɵangular_packages_common_common_a`.
+         const jsContents = fs.readFile(_(`/node_modules/@angular/common/fesm2015/common.js`));
+         const exportedNameMatch = jsContents.match(/export.* NgClassR3Impl as ([^ ,}]+)/);
+         if (exportedNameMatch === null) {
+           return fail(
+               'Expected `/node_modules/@angular/common/fesm2015/common.js` to export `NgClassR3Impl` via an alias');
+         }
+         const exportedName = exportedNameMatch[1];
+
+         // We need to make sure that the flat typings file exports this directly
+         const dtsContents = fs.readFile(_('/node_modules/@angular/common/common.d.ts'));
+         expect(dtsContents).toContain(`export declare class ${exportedName} extends ɵNgClassImpl`);
+         // And that ngcc's modifications to that class use the correct (exported) name
+         expect(dtsContents).toContain(`static ɵprov: ɵngcc0.ɵɵInjectableDef<${exportedName}>`);
+       });
+
+    it('should add generic type for ModuleWithProviders and generate exports for private modules',
+       () => {
+         compileIntoApf('test-package', {
+           '/index.ts': `
+              import {ModuleWithProviders} from '@angular/core';
+              import {InternalFooModule} from './internal';
+
+              export class FooModule {
+                static forRoot(): ModuleWithProviders {
+                  return {
+                    ngModule: InternalFooModule,
+                  };
+                }
+              }
+            `,
+           '/internal.ts': `
+              import {NgModule} from '@angular/core';
+
+              @NgModule()
+              export class InternalFooModule {}
+           `,
+         });
+
+         mainNgcc({
+           basePath: '/node_modules',
+           targetEntryPointPath: 'test-package',
+           propertiesToConsider: ['esm2015', 'esm5', 'module'],
+         });
+
+         // The .d.ts where FooModule is declared should have a generic type added
+         const dtsContents = fs.readFile(_(`/node_modules/test-package/src/index.d.ts`));
+         expect(dtsContents).toContain(`import * as ɵngcc0 from './internal';`);
+         expect(dtsContents)
+             .toContain(`static forRoot(): ModuleWithProviders<ɵngcc0.InternalFooModule>`);
+
+         // The public facing .d.ts should export the InternalFooModule
+         const entryDtsContents = fs.readFile(_(`/node_modules/test-package/index.d.ts`));
+         expect(entryDtsContents).toContain(`export {InternalFooModule} from './src/internal';`);
+
+         // The esm2015 index source should export the InternalFooModule
+         const esm2015Contents = fs.readFile(_(`/node_modules/test-package/esm2015/index.js`));
+         expect(esm2015Contents).toContain(`export {InternalFooModule} from './src/internal';`);
+
+         // The esm5 index source should also export the InternalFooModule
+         const esm5Contents = fs.readFile(_(`/node_modules/test-package/esm5/index.js`));
+         expect(esm5Contents).toContain(`export {InternalFooModule} from './src/internal';`);
+       });
+
+    it('should use `$localize` calls rather than tagged templates in ES5 generated code', () => {
+      compileIntoFlatEs5Package('test-package', {
+        '/index.ts': `
+        import {Component, Input, NgModule} from '@angular/core';
+
+        @Component({
+          selector: '[foo]',
+          template: '<div i18n="some:\`description\`">A message</div>'
+        })
+        export class FooComponent {
+        }
+
+        @NgModule({
+          declarations: [FooComponent],
+        })
+        export class FooModule {}
+      `,
+      });
+
+      mainNgcc({
+        basePath: '/node_modules',
+        targetEntryPointPath: 'test-package',
+        propertiesToConsider: ['main'],
+      });
+
+      const jsContents = fs.readFile(_(`/node_modules/test-package/index.js`));
+      expect(jsContents).not.toMatch(/\$localize\s*`/);
+      expect(jsContents)
+          .toMatch(
+              /\$localize\(ɵngcc\d+\.__makeTemplateObject\(\[":some:`description`\\u241Fefc92f285b3c24b083a8a594f62c7fccf3118766\\u241F3806630072763809030:A message"], \[":some\\\\:\\\\`description\\\\`\\u241Fefc92f285b3c24b083a8a594f62c7fccf3118766\\u241F3806630072763809030:A message"]\)\);/);
     });
 
     describe('in async mode', () => {
@@ -555,13 +786,20 @@ runInEachFileSystem(() => {
             `,
           },
         ]);
-        expect(() => mainNgcc({
-                 basePath: '/node_modules',
-                 targetEntryPointPath: 'fatal-error',
-                 propertiesToConsider: ['es2015']
-               }))
-            .toThrowError(
-                /^Failed to compile entry-point fatal-error due to compilation errors:\nnode_modules\/fatal-error\/index\.js\(5,17\): error TS-992001: component is missing a template\r?\n$/);
+
+        try {
+          mainNgcc({
+            basePath: '/node_modules',
+            targetEntryPointPath: 'fatal-error',
+            propertiesToConsider: ['es2015']
+          });
+          fail('should have thrown');
+        } catch (e) {
+          expect(e.message).toContain(
+              'Failed to compile entry-point fatal-error (es2015 as esm2015) due to compilation errors:');
+          expect(e.message).toContain('NG2001');
+          expect(e.message).toContain('component is missing a template');
+        }
       });
     });
 
@@ -752,6 +990,327 @@ runInEachFileSystem(() => {
       });
     });
 
+    describe('undecorated child class migration', () => {
+      it('should generate a directive definition with CopyDefinitionFeature for an undecorated child directive',
+         () => {
+           compileIntoFlatEs5Package('test-package', {
+             '/index.ts': `
+              import {Directive, NgModule} from '@angular/core';
+
+              @Directive({
+                selector: '[base]',
+                exportAs: 'base1, base2',
+              })
+              export class BaseDir {}
+
+              export class DerivedDir extends BaseDir {}
+
+              @NgModule({
+                declarations: [DerivedDir],
+              })
+              export class Module {}
+            `,
+           });
+
+           mainNgcc({
+             basePath: '/node_modules',
+             targetEntryPointPath: 'test-package',
+             propertiesToConsider: ['main'],
+           });
+
+
+           const jsContents = fs.readFile(_(`/node_modules/test-package/index.js`));
+           expect(jsContents)
+               .toContain(
+                   'DerivedDir.ɵdir = ɵngcc0.ɵɵdefineDirective({ type: DerivedDir, ' +
+                   'selectors: [["", "base", ""]], exportAs: ["base1", "base2"], ' +
+                   'features: [ɵngcc0.ɵɵInheritDefinitionFeature, ɵngcc0.ɵɵCopyDefinitionFeature] });');
+
+           const dtsContents = fs.readFile(_(`/node_modules/test-package/index.d.ts`));
+           expect(dtsContents)
+               .toContain(
+                   'static ɵdir: ɵngcc0.ɵɵDirectiveDefWithMeta<DerivedDir, "[base]", ["base1", "base2"], {}, {}, never>;');
+         });
+
+      it('should generate a component definition with CopyDefinitionFeature for an undecorated child component',
+         () => {
+           compileIntoFlatEs5Package('test-package', {
+             '/index.ts': `
+           import {Component, NgModule} from '@angular/core';
+
+           @Component({
+             selector: '[base]',
+             template: '<span>This is the base template</span>',
+           })
+           export class BaseCmp {}
+
+           export class DerivedCmp extends BaseCmp {}
+
+           @NgModule({
+             declarations: [DerivedCmp],
+           })
+           export class Module {}
+         `,
+           });
+
+           mainNgcc({
+             basePath: '/node_modules',
+             targetEntryPointPath: 'test-package',
+             propertiesToConsider: ['main'],
+           });
+
+
+           const jsContents = fs.readFile(_(`/node_modules/test-package/index.js`));
+           expect(jsContents).toContain('DerivedCmp.ɵcmp = ɵngcc0.ɵɵdefineComponent');
+           expect(jsContents)
+               .toContain(
+                   'features: [ɵngcc0.ɵɵInheritDefinitionFeature, ɵngcc0.ɵɵCopyDefinitionFeature]');
+
+           const dtsContents = fs.readFile(_(`/node_modules/test-package/index.d.ts`));
+           expect(dtsContents)
+               .toContain(
+                   'static ɵcmp: ɵngcc0.ɵɵComponentDefWithMeta<DerivedCmp, "[base]", never, {}, {}, never>;');
+         });
+
+      it('should generate directive definitions with CopyDefinitionFeature for undecorated child directives in a long inheritance chain',
+         () => {
+           compileIntoFlatEs5Package('test-package', {
+             '/index.ts': `
+           import {Directive, NgModule} from '@angular/core';
+
+           @Directive({
+             selector: '[base]',
+           })
+           export class BaseDir {}
+
+           export class DerivedDir1 extends BaseDir {}
+
+           export class DerivedDir2 extends DerivedDir1 {}
+
+           export class DerivedDir3 extends DerivedDir2 {}
+
+           @NgModule({
+             declarations: [DerivedDir3],
+           })
+           export class Module {}
+         `,
+           });
+
+           mainNgcc({
+             basePath: '/node_modules',
+             targetEntryPointPath: 'test-package',
+             propertiesToConsider: ['main'],
+           });
+
+           const dtsContents = fs.readFile(_(`/node_modules/test-package/index.d.ts`));
+           expect(dtsContents)
+               .toContain(
+                   'static ɵdir: ɵngcc0.ɵɵDirectiveDefWithMeta<DerivedDir1, "[base]", never, {}, {}, never>;');
+           expect(dtsContents)
+               .toContain(
+                   'static ɵdir: ɵngcc0.ɵɵDirectiveDefWithMeta<DerivedDir2, "[base]", never, {}, {}, never>;');
+           expect(dtsContents)
+               .toContain(
+                   'static ɵdir: ɵngcc0.ɵɵDirectiveDefWithMeta<DerivedDir3, "[base]", never, {}, {}, never>;');
+         });
+    });
+
+    describe('aliasing re-exports in commonjs', () => {
+      it('should add re-exports to commonjs files', () => {
+        loadTestFiles([
+          {
+            name: _('/node_modules/test-package/package.json'),
+            contents: `
+              {
+                "name": "test-package",
+                "main": "./index.js",
+                "typings": "./index.d.ts"
+              }
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/index.js'),
+            contents: `
+              var __export = null;
+              __export(require("./module"));
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/index.d.ts'),
+            contents: `
+              export * from "./module";
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/index.metadata.json'),
+            contents: '{}',
+          },
+          {
+            name: _('/node_modules/test-package/module.js'),
+            contents: `
+              var __decorate = null;
+              var core_1 = require("@angular/core");
+              var directive_1 = require("./directive");
+              var LocalDir = /** @class */ (function () {
+                  function LocalDir() {
+                  }
+                  LocalDir = __decorate([
+                      core_1.Directive({
+                          selector: '[local]',
+                      })
+                  ], LocalDir);
+                  return LocalDir;
+              }());
+              var FooModule = /** @class */ (function () {
+                  function FooModule() {
+                  }
+                  FooModule = __decorate([
+                      core_1.NgModule({
+                          declarations: [directive_1.Foo, LocalDir],
+                          exports: [directive_1.Foo, LocalDir],
+                      })
+                  ], FooModule);
+                  return FooModule;
+              }());
+              exports.LocalDir = LocalDir;
+              exports.FooModule = FooModule;
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/module.d.ts'),
+            contents: `
+              export declare class LocalDir {}
+              export declare class FooModule {}
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/module.metadata.json'),
+            contents: '{}',
+          },
+          {
+            name: _('/node_modules/test-package/directive.js'),
+            contents: `
+              var __decorate = null;
+              var core_1 = require("@angular/core");
+              var Foo = /** @class */ (function () {
+                  function Foo() {
+                  }
+                  Foo = __decorate([
+                      core_1.Directive({
+                          selector: '[foo]',
+                      })
+                  ], Foo);
+                  return Foo;
+              }());
+              exports.Foo = Foo;
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/directive.d.ts'),
+            contents: `
+              export declare class Foo {}
+            `,
+          },
+          {
+            name: _('/node_modules/test-package/directive.metadata.json'),
+            contents: '{}',
+          },
+          {
+            name: _('/ngcc.config.js'),
+            contents: `
+              module.exports = {
+                packages: {
+                  'test-package': {
+                    entryPoints: {
+                      '.': {
+                        generateDeepReexports: true
+                      },
+                    },
+                  },
+                },
+              };
+            `,
+          }
+        ]);
+
+        mainNgcc({
+          basePath: '/node_modules',
+          targetEntryPointPath: 'test-package',
+          propertiesToConsider: ['main'],
+        });
+
+        expect(loadPackage('test-package').__processed_by_ivy_ngcc__).toEqual({
+          main: '0.0.0-PLACEHOLDER',
+          typings: '0.0.0-PLACEHOLDER',
+        });
+
+        const jsContents = fs.readFile(_(`/node_modules/test-package/module.js`));
+        const dtsContents = fs.readFile(_(`/node_modules/test-package/module.d.ts`));
+        expect(jsContents).toContain(`var ɵngcc1 = require('./directive');`);
+        expect(jsContents).toContain('exports.ɵngExportɵFooModuleɵFoo = ɵngcc1.Foo;');
+        expect(dtsContents)
+            .toContain(`export {Foo as ɵngExportɵFooModuleɵFoo} from './directive';`);
+        expect(dtsContents.match(/ɵngExportɵFooModuleɵFoo/g) !.length).toBe(1);
+        expect(dtsContents).not.toContain(`ɵngExportɵFooModuleɵLocalDir`);
+      });
+    });
+
+    describe('legacy message ids', () => {
+      it('should render legacy message ids when compiling i18n tags in component templates', () => {
+        compileIntoApf('test-package', {
+          '/index.ts': `
+           import {Component} from '@angular/core';
+
+           @Component({
+             selector: '[base]',
+             template: '<div i18n>Some message</div>'
+           })
+           export class AppComponent {}
+         `,
+        });
+
+        mainNgcc({
+          basePath: '/node_modules',
+          targetEntryPointPath: 'test-package',
+          propertiesToConsider: ['esm2015'],
+        });
+
+
+        const jsContents = fs.readFile(_(`/node_modules/test-package/esm2015/src/index.js`));
+        expect(jsContents)
+            .toContain(
+                '$localize `:␟888aea0e46f7e9dddbd95fc1ef380a3ff70ada9d␟1812794354835616626:Some message');
+      });
+
+      it('should not render legacy message ids when compiling i18n tags in component templates if `enableI18nLegacyMessageIdFormat` is false',
+         () => {
+           compileIntoApf('test-package', {
+             '/index.ts': `
+           import {Component} from '@angular/core';
+
+           @Component({
+             selector: '[base]',
+             template: '<div i18n>Some message</div>'
+           })
+           export class AppComponent {}
+         `,
+           });
+
+           mainNgcc({
+             basePath: '/node_modules',
+             targetEntryPointPath: 'test-package',
+             propertiesToConsider: ['esm2015'],
+             enableI18nLegacyMessageIdFormat: false,
+           });
+
+
+           const jsContents = fs.readFile(_(`/node_modules/test-package/esm2015/src/index.js`));
+           expect(jsContents).not.toContain('␟888aea0e46f7e9dddbd95fc1ef380a3ff70ada9d');
+           expect(jsContents).not.toContain('␟1812794354835616626');
+           expect(jsContents).not.toContain('␟');
+         });
+    });
+
     function loadPackage(
         packageName: string, basePath: AbsoluteFsPath = _('/node_modules')): EntryPointPackageJson {
       return JSON.parse(fs.readFile(fs.resolve(basePath, packageName, 'package.json')));
@@ -824,3 +1383,8 @@ runInEachFileSystem(() => {
     }
   });
 });
+
+function countOccurrences(haystack: string, needle: string): number {
+  const matches = haystack.match(new RegExp(needle, 'g'));
+  return matches !== null ? matches.length : 0;
+}

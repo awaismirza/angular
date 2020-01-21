@@ -24,10 +24,10 @@ export class InvalidFileSystem implements FileSystem {
   lstat(path: AbsoluteFsPath): FileStats { throw makeError(); }
   stat(path: AbsoluteFsPath): FileStats { throw makeError(); }
   pwd(): AbsoluteFsPath { throw makeError(); }
+  chdir(path: AbsoluteFsPath): void { throw makeError(); }
   extname(path: AbsoluteFsPath|PathSegment): string { throw makeError(); }
   copyFile(from: AbsoluteFsPath, to: AbsoluteFsPath): void { throw makeError(); }
   moveFile(from: AbsoluteFsPath, to: AbsoluteFsPath): void { throw makeError(); }
-  mkdir(path: AbsoluteFsPath): void { throw makeError(); }
   ensureDir(path: AbsoluteFsPath): void { throw makeError(); }
   isCaseSensitive(): boolean { throw makeError(); }
   resolve(...paths: string[]): AbsoluteFsPath { throw makeError(); }

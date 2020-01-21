@@ -7,10 +7,10 @@
  */
 import {bindingUpdated} from '../bindings';
 import {SanitizerFn} from '../interfaces/sanitization';
-import {BINDING_INDEX, TVIEW} from '../interfaces/view';
-import {getLView, getSelectedIndex} from '../state';
+import {TVIEW} from '../interfaces/view';
+import {getLView, getSelectedIndex, nextBindingIndex} from '../state';
 
-import {TsickleIssue1009, elementPropertyInternal, storePropertyBindingMetadata} from './shared';
+import {elementPropertyInternal, storePropertyBindingMetadata} from './shared';
 
 
 /**
@@ -32,9 +32,9 @@ import {TsickleIssue1009, elementPropertyInternal, storePropertyBindingMetadata}
  * @codeGenApi
  */
 export function ɵɵproperty<T>(
-    propName: string, value: T, sanitizer?: SanitizerFn | null): TsickleIssue1009 {
+    propName: string, value: T, sanitizer?: SanitizerFn | null): typeof ɵɵproperty {
   const lView = getLView();
-  const bindingIndex = lView[BINDING_INDEX]++;
+  const bindingIndex = nextBindingIndex();
   if (bindingUpdated(lView, bindingIndex, value)) {
     const nodeIndex = getSelectedIndex();
     elementPropertyInternal(lView, nodeIndex, propName, value, sanitizer);

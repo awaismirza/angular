@@ -12,7 +12,7 @@ import {NG_FACTORY_DEF} from '../../render3/fields';
 import {getClosureSafeProperty} from '../../util/property';
 import {resolveForwardRef} from '../forward_ref';
 import {Injectable} from '../injectable';
-import {NG_INJECTABLE_DEF} from '../interface/defs';
+import {NG_PROV_DEF, NG_PROV_DEF_FALLBACK} from '../interface/defs';
 import {ClassSansProvider, ExistingSansProvider, FactorySansProvider, ValueProvider, ValueSansProvider} from '../interface/provider';
 
 import {angularCoreDiEnv} from './environment';
@@ -22,24 +22,34 @@ import {convertDependencies, reflectDependencies} from './util';
 
 /**
  * Compile an Angular injectable according to its `Injectable` metadata, and patch the resulting
- * `ngInjectableDef` onto the injectable type.
+ * injectable def (`ɵprov`) onto the injectable type.
  */
 export function compileInjectable(type: Type<any>, srcMeta?: Injectable): void {
   let ngInjectableDef: any = null;
   let ngFactoryDef: any = null;
 
-  // if NG_INJECTABLE_DEF is already defined on this class then don't overwrite it
-  if (!type.hasOwnProperty(NG_INJECTABLE_DEF)) {
-    Object.defineProperty(type, NG_INJECTABLE_DEF, {
+  // if NG_PROV_DEF is already defined on this class then don't overwrite it
+  if (!type.hasOwnProperty(NG_PROV_DEF)) {
+    Object.defineProperty(type, NG_PROV_DEF, {
       get: () => {
         if (ngInjectableDef === null) {
           ngInjectableDef = getCompilerFacade().compileInjectable(
-              angularCoreDiEnv, `ng:///${type.name}/ngInjectableDef.js`,
+              angularCoreDiEnv, `ng:///${type.name}/ɵprov.js`,
               getInjectableMetadata(type, srcMeta));
         }
         return ngInjectableDef;
       },
     });
+
+    // On IE10 properties defined via `defineProperty` won't be inherited by child classes,
+    // which will break inheriting the injectable definition from a grandparent through an
+    // undecorated parent class. We work around it by defining a method which should be used
+    // as a fallback. This should only be a problem in JIT mode, because in AOT TypeScript
+    // seems to have a workaround for static properties. When inheriting from an undecorated
+    // parent is no longer supported in v10, this can safely be removed.
+    if (!type.hasOwnProperty(NG_PROV_DEF_FALLBACK)) {
+      (type as any)[NG_PROV_DEF_FALLBACK] = () => (type as any)[NG_PROV_DEF];
+    }
   }
 
   // if NG_FACTORY_DEF is already defined on this class then don't overwrite it
@@ -48,15 +58,15 @@ export function compileInjectable(type: Type<any>, srcMeta?: Injectable): void {
       get: () => {
         if (ngFactoryDef === null) {
           const metadata = getInjectableMetadata(type, srcMeta);
-          ngFactoryDef = getCompilerFacade().compileFactory(
-              angularCoreDiEnv, `ng:///${type.name}/ngFactoryDef.js`, {
-                name: metadata.name,
-                type: metadata.type,
-                typeArgumentCount: metadata.typeArgumentCount,
-                deps: reflectDependencies(type),
-                injectFn: 'inject',
-                isPipe: false
-              });
+          const compiler = getCompilerFacade();
+          ngFactoryDef = compiler.compileFactory(angularCoreDiEnv, `ng:///${type.name}/ɵfac.js`, {
+            name: metadata.name,
+            type: metadata.type,
+            typeArgumentCount: metadata.typeArgumentCount,
+            deps: reflectDependencies(type),
+            injectFn: 'inject',
+            target: compiler.R3FactoryTarget.Pipe
+          });
         }
         return ngFactoryDef;
       },

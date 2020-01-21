@@ -668,7 +668,7 @@ describe('compiler compliance: bindings', () => {
       };
 
       const HostBindingDirDeclaration = `
-        HostBindingDir.ngDirectiveDef = $r3$.ɵɵdefineDirective({
+        HostBindingDir.ɵdir = $r3$.ɵɵdefineDirective({
           type: HostBindingDir,
           selectors: [["", "hostBindingDir", ""]],
           hostBindings: function HostBindingDir_HostBindings(rf, ctx, elIndex) {
@@ -714,7 +714,7 @@ describe('compiler compliance: bindings', () => {
       const HostBindingCompDeclaration = `
         const $ff$ = function ($v$) { return ["red", $v$]; };
         …
-        HostBindingComp.ngComponentDef = $r3$.ɵɵdefineComponent({
+        HostBindingComp.ɵcmp = $r3$.ɵɵdefineComponent({
           type: HostBindingComp,
           selectors: [["host-binding-comp"]],
           hostBindings: function HostBindingComp_HostBindings(rf, ctx, elIndex) {
@@ -761,7 +761,7 @@ describe('compiler compliance: bindings', () => {
       };
 
       const HostAttributeDirDeclaration = `
-        HostAttributeDir.ngDirectiveDef = $r3$.ɵɵdefineDirective({
+        HostAttributeDir.ɵdir = $r3$.ɵɵdefineDirective({
           type: HostAttributeDir,
           selectors: [["", "hostAttributeDir", ""]],
           hostBindings: function HostAttributeDir_HostBindings(rf, ctx, elIndex) {
@@ -805,7 +805,7 @@ describe('compiler compliance: bindings', () => {
       const HostAttributeDirDeclaration = `
         const $c0$ = ["aria-label", "label"];
         …
-        HostAttributeDir.ngDirectiveDef = $r3$.ɵɵdefineDirective({
+        HostAttributeDir.ɵdir = $r3$.ɵɵdefineDirective({
           type: HostAttributeDir,
           selectors: [["", "hostAttributeDir", ""]],
           hostBindings: function HostAttributeDir_HostBindings(rf, ctx, elIndex) {
@@ -862,7 +862,7 @@ describe('compiler compliance: bindings', () => {
         const $c0$ = ["title", "hello there from component", ${AttributeMarker.Styles}, "opacity", "1"];
         const $c1$ = ["title", "hello there from directive", ${AttributeMarker.Classes}, "one", "two", ${AttributeMarker.Styles}, "width", "200px", "height", "500px"];
         …
-        HostAttributeComp.ngComponentDef = $r3$.ɵɵdefineComponent({
+        HostAttributeComp.ɵcmp = $r3$.ɵɵdefineComponent({
           type: HostAttributeComp,
           selectors: [["my-host-attribute-component"]],
           hostBindings: function HostAttributeComp_HostBindings(rf, ctx, elIndex) {
@@ -873,7 +873,7 @@ describe('compiler compliance: bindings', () => {
             …
           }
         …
-        HostAttributeDir.ngDirectiveDef = $r3$.ɵɵdefineDirective({
+        HostAttributeDir.ɵdir = $r3$.ɵɵdefineDirective({
           type: HostAttributeDir,
           selectors: [["", "hostAttributeDir", ""]],
           hostBindings: function HostAttributeDir_HostBindings(rf, ctx, elIndex) {
@@ -1134,6 +1134,113 @@ describe('compiler compliance: bindings', () => {
       expectEmit(result.source, template, 'Incorrect template');
     });
 
+    it('should chain multiple host listeners into a single instruction', () => {
+      const files = {
+        app: {
+          'example.ts': `
+            import {Directive, HostListener} from '@angular/core';
+
+            @Directive({
+              selector: '[my-dir]',
+              host: {
+                '(mousedown)': 'mousedown()',
+                '(mouseup)': 'mouseup()',
+              }
+            })
+            export class MyDirective {
+              mousedown() {}
+              mouseup() {}
+
+              @HostListener('click')
+              click() {}
+            }`
+        }
+      };
+
+      const result = compile(files, angularFiles);
+      const template = `
+          …
+          hostBindings: function MyDirective_HostBindings(rf, ctx, elIndex) {
+            if (rf & 1) {
+              $r3$.ɵɵlistener("mousedown", function MyDirective_mousedown_HostBindingHandler($event) { return ctx.mousedown(); })("mouseup", function MyDirective_mouseup_HostBindingHandler($event) { return ctx.mouseup(); })("click", function MyDirective_click_HostBindingHandler($event) { return ctx.click(); });
+            }
+          }
+        `;
+
+      expectEmit(result.source, template, 'Incorrect template');
+    });
+
+    it('should chain multiple synthetic host listeners into a single instruction', () => {
+      const files = {
+        app: {
+          'example.ts': `
+            import {Component, HostListener} from '@angular/core';
+
+            @Component({
+              selector: 'my-comp',
+              template: '',
+              host: {
+                '(@animation.done)': 'done()',
+              }
+            })
+            export class MyComponent {
+              @HostListener('@animation.start')
+              start() {}
+            }`
+        }
+      };
+
+      const result = compile(files, angularFiles);
+      const template = `
+          …
+          hostBindings: function MyComponent_HostBindings(rf, ctx, elIndex) {
+            if (rf & 1) {
+              $r3$.ɵɵcomponentHostSyntheticListener("@animation.done", function MyComponent_animation_animation_done_HostBindingHandler($event) { return ctx.done(); })("@animation.start", function MyComponent_animation_animation_start_HostBindingHandler($event) { return ctx.start(); });
+            }
+          }
+        `;
+
+      expectEmit(result.source, template, 'Incorrect template');
+    });
+
+    it('should chain multiple regular and synthetic host listeners into two instructions', () => {
+      const files = {
+        app: {
+          'example.ts': `
+            import {Component, HostListener} from '@angular/core';
+
+            @Component({
+              selector: 'my-comp',
+              template: '',
+              host: {
+                '(mousedown)': 'mousedown()',
+                '(@animation.done)': 'done()',
+                '(mouseup)': 'mouseup()',
+              }
+            })
+            export class MyComponent {
+              @HostListener('@animation.start')
+              start() {}
+
+              @HostListener('click')
+              click() {}
+            }`
+        }
+      };
+
+      const result = compile(files, angularFiles);
+      const template = `
+        …
+        hostBindings: function MyComponent_HostBindings(rf, ctx, elIndex) {
+          if (rf & 1) {
+            $r3$.ɵɵcomponentHostSyntheticListener("@animation.done", function MyComponent_animation_animation_done_HostBindingHandler($event) { return ctx.done(); })("@animation.start", function MyComponent_animation_animation_start_HostBindingHandler($event) { return ctx.start(); });
+            $r3$.ɵɵlistener("mousedown", function MyComponent_mousedown_HostBindingHandler($event) { return ctx.mousedown(); })("mouseup", function MyComponent_mouseup_HostBindingHandler($event) { return ctx.mouseup(); })("click", function MyComponent_click_HostBindingHandler($event) { return ctx.click(); });
+          }
+        }
+      `;
+      expectEmit(result.source, template, 'Incorrect template');
+    });
+
   });
 
   describe('non bindable behavior', () => {
@@ -1251,12 +1358,11 @@ describe('compiler compliance: bindings', () => {
       `);
 
       const template = `
-        const $_c1$ = ["myRef", ""];
         …
-        consts: [["id", "my-id"]],
+        consts: [["id", "my-id"], ["myRef", ""]],
         template:function MyComponent_Template(rf, $ctx$){
           if (rf & 1) {
-            $i0$.ɵɵelementStart(0, "b", 0, $_c1$);
+            $i0$.ɵɵelementStart(0, "b", 0, 1);
             $i0$.ɵɵdisableBindings();
             $i0$.ɵɵelementStart(2, "i");
             $i0$.ɵɵtext(3, "Hello {{ name }}!");

@@ -8,7 +8,6 @@
 
 import * as tss from 'typescript/lib/tsserverlibrary';
 
-import {isAstResult} from './common';
 import {getTemplateCompletions} from './completions';
 import {getDefinitionAndBoundSpan, getTsDefinitionAndBoundSpan} from './definitions';
 import {getDeclarationDiagnostics, getTemplateDiagnostics, ngDiagnosticToTsDiagnostic, uniqueBySpan} from './diagnostics';
@@ -28,22 +27,15 @@ export function createLanguageService(host: TypeScriptServiceHost): LanguageServ
 class LanguageServiceImpl implements LanguageService {
   constructor(private readonly host: TypeScriptServiceHost) {}
 
-  getTemplateReferences(): string[] {
-    this.host.getAnalyzedModules();  // same role as 'synchronizeHostData'
-    return this.host.getTemplateReferences();
-  }
-
   getDiagnostics(fileName: string): tss.Diagnostic[] {
     const analyzedModules = this.host.getAnalyzedModules();  // same role as 'synchronizeHostData'
     const results: Diagnostic[] = [];
     const templates = this.host.getTemplates(fileName);
 
     for (const template of templates) {
-      const astOrDiagnostic = this.host.getTemplateAst(template);
-      if (isAstResult(astOrDiagnostic)) {
-        results.push(...getTemplateDiagnostics(astOrDiagnostic));
-      } else {
-        results.push(astOrDiagnostic);
+      const ast = this.host.getTemplateAst(template);
+      if (ast) {
+        results.push(...getTemplateDiagnostics(ast));
       }
     }
 
@@ -70,7 +62,8 @@ class LanguageServiceImpl implements LanguageService {
       isGlobalCompletion: false,
       isMemberCompletion: false,
       isNewIdentifierLocation: false,
-      entries: results,
+      // Cast CompletionEntry.kind from ng.CompletionKind to ts.ScriptElementKind
+      entries: results as unknown as ts.CompletionEntry[],
     };
   }
 
@@ -95,7 +88,7 @@ class LanguageServiceImpl implements LanguageService {
     this.host.getAnalyzedModules();  // same role as 'synchronizeHostData'
     const templateInfo = this.host.getTemplateAstAtPosition(fileName, position);
     if (templateInfo) {
-      return getHover(templateInfo, position);
+      return getHover(templateInfo, position, this.host);
     }
 
     // Attempt to get Angular-specific hover information in a TypeScript file, the NgModule a

@@ -5,8 +5,9 @@
 * Use of this source code is governed by an MIT-style license that can be
 * found in the LICENSE file at https://angular.io/license
 */
-import {TNode, TNodeFlags} from '../interfaces/node';
-import {LStylingData, StylingMapArray, StylingMapArrayIndex, TStylingConfig, TStylingContext, TStylingContextIndex, TStylingContextPropConfigFlags} from '../interfaces/styling';
+import {unwrapSafeValue} from '../../sanitization/bypass';
+import {PropertyAliases, TNodeFlags} from '../interfaces/node';
+import {LStylingData, StylingMapArray, StylingMapArrayIndex, TStylingContext, TStylingContextIndex, TStylingContextPropConfigFlags, TStylingNode} from '../interfaces/styling';
 import {NO_CHANGE} from '../tokens';
 
 export const MAP_BASED_ENTRY_PROP_NAME = '[MAP]';
@@ -43,73 +44,61 @@ export const DEFAULT_GUARD_MASK_VALUE = 0b1;
  */
 export function allocTStylingContext(
     initialStyling: StylingMapArray | null, hasDirectives: boolean): TStylingContext {
-  initialStyling = initialStyling || allocStylingMapArray();
-  let config = TStylingConfig.Initial;
-  if (hasDirectives) {
-    config |= TStylingConfig.HasDirectives;
-  }
-  if (initialStyling.length > StylingMapArrayIndex.ValuesStartPosition) {
-    config |= TStylingConfig.HasInitialStyling;
-  }
+  initialStyling = initialStyling || allocStylingMapArray(null);
   return [
-    config,                 // 1) config for the styling context
-    DEFAULT_TOTAL_SOURCES,  // 2) total amount of styling sources (template, directives, etc...)
-    initialStyling,         // 3) initial styling values
+    DEFAULT_TOTAL_SOURCES,  // 1) total amount of styling sources (template, directives, etc...)
+    initialStyling,         // 2) initial styling values
   ];
 }
 
-export function allocStylingMapArray(): StylingMapArray {
-  return [''];
+export function allocStylingMapArray(value: {} | string | null): StylingMapArray {
+  return [value];
 }
 
-export function getConfig(context: TStylingContext) {
-  return context[TStylingContextIndex.ConfigPosition];
-}
-
-export function hasConfig(context: TStylingContext, flag: TStylingConfig) {
-  return (getConfig(context) & flag) !== 0;
+export function hasConfig(tNode: TStylingNode, flag: TNodeFlags) {
+  return (tNode.flags & flag) !== 0;
 }
 
 /**
  * Determines whether or not to apply styles/classes directly or via context resolution.
  *
  * There are three cases that are matched here:
- * 1. there are no directives present AND ngDevMode is falsy
- * 2. context is locked for template or host bindings (depending on `hostBindingsMode`)
+ * 1. there are no directives present AND `ngDevMode` is falsy
+ * 2. the `firstUpdatePass` has not already run (which means that
+ *    there are more bindings to register and, therefore, direct
+ *    style/class application is not yet possible)
  * 3. There are no collisions (i.e. properties with more than one binding) across multiple
  *    sources (i.e. template + directive, directive + directive, directive + component)
  */
-export function allowDirectStyling(context: TStylingContext, hostBindingsMode: boolean): boolean {
+export function allowDirectStyling(
+    tNode: TStylingNode, isClassBased: boolean, firstUpdatePass: boolean): boolean {
   let allow = false;
-  const config = getConfig(context);
-  const contextIsLocked = (config & getLockedConfig(hostBindingsMode)) !== 0;
-  const hasNoDirectives = (config & TStylingConfig.HasDirectives) === 0;
 
   // if no directives are present then we do not need populate a context at all. This
   // is because duplicate prop bindings cannot be registered through the template. If
   // and when this happens we can safely apply the value directly without context
   // resolution...
-  if (hasNoDirectives) {
+  const hasDirectives = hasConfig(tNode, TNodeFlags.hasHostBindings);
+  if (!hasDirectives) {
     // `ngDevMode` is required to be checked here because tests/debugging rely on the context being
     // populated. If things are in production mode then there is no need to build a context
     // therefore the direct apply can be allowed (even on the first update).
-    allow = ngDevMode ? contextIsLocked : true;
-  } else if (contextIsLocked) {
-    const hasNoCollisions = (config & TStylingConfig.HasCollisions) === 0;
-    const hasOnlyMapsOrOnlyProps =
-        (config & TStylingConfig.HasPropAndMapBindings) !== TStylingConfig.HasPropAndMapBindings;
-    allow = hasNoCollisions && hasOnlyMapsOrOnlyProps;
+    allow = ngDevMode ? !firstUpdatePass : true;
+  } else if (!firstUpdatePass) {
+    const duplicateStylingFlag =
+        isClassBased ? TNodeFlags.hasDuplicateClassBindings : TNodeFlags.hasDuplicateStyleBindings;
+    const hasDuplicates = hasConfig(tNode, duplicateStylingFlag);
+    const hasOnlyMapOrPropsFlag = isClassBased ? TNodeFlags.hasClassPropAndMapBindings :
+                                                 TNodeFlags.hasStylePropAndMapBindings;
+    const hasOnlyMapsOrOnlyProps = (tNode.flags & hasOnlyMapOrPropsFlag) !== hasOnlyMapOrPropsFlag;
+    allow = !hasDuplicates && hasOnlyMapsOrOnlyProps;
   }
 
   return allow;
 }
 
-export function setConfig(context: TStylingContext, value: TStylingConfig): void {
-  context[TStylingContextIndex.ConfigPosition] = value;
-}
-
-export function patchConfig(context: TStylingContext, flag: TStylingConfig): void {
-  context[TStylingContextIndex.ConfigPosition] |= flag;
+export function patchConfig(tNode: TStylingNode, flag: TNodeFlags): void {
+  tNode.flags |= flag;
 }
 
 export function getProp(context: TStylingContext, index: number): string {
@@ -169,34 +158,30 @@ export function setValue(data: LStylingData, bindingIndex: number, value: any) {
 }
 
 export function getValue<T = any>(data: LStylingData, bindingIndex: number): T|null {
-  return bindingIndex > 0 ? data[bindingIndex] as T : null;
+  return bindingIndex !== 0 ? data[bindingIndex] as T : null;
 }
 
-export function lockContext(context: TStylingContext, hostBindingsMode: boolean): void {
-  patchConfig(context, getLockedConfig(hostBindingsMode));
-}
-
-export function isContextLocked(context: TStylingContext, hostBindingsMode: boolean): boolean {
-  return hasConfig(context, getLockedConfig(hostBindingsMode));
-}
-
-export function getLockedConfig(hostBindingsMode: boolean) {
-  return hostBindingsMode ? TStylingConfig.HostBindingsLocked :
-                            TStylingConfig.TemplateBindingsLocked;
-}
-
-export function getPropValuesStartPosition(context: TStylingContext) {
+export function getPropValuesStartPosition(
+    context: TStylingContext, tNode: TStylingNode, isClassBased: boolean) {
   let startPosition = TStylingContextIndex.ValuesStartPosition;
-  if (hasConfig(context, TStylingConfig.HasMapBindings)) {
+  const flag = isClassBased ? TNodeFlags.hasClassMapBindings : TNodeFlags.hasStyleMapBindings;
+  if (hasConfig(tNode, flag)) {
     startPosition += TStylingContextIndex.BindingsStartOffset + getValuesCount(context);
   }
   return startPosition;
 }
 
-export function hasValueChanged(
+export function hasValueChangedUnwrapSafeValue(
     a: NO_CHANGE | StylingMapArray | number | String | string | null | boolean | undefined | {},
     b: NO_CHANGE | StylingMapArray | number | String | string | null | boolean | undefined |
         {}): boolean {
+  return hasValueChanged(unwrapSafeValue(a), unwrapSafeValue(b));
+}
+
+
+export function hasValueChanged(
+    a: NO_CHANGE | StylingMapArray | number | string | null | boolean | undefined | {},
+    b: NO_CHANGE | StylingMapArray | number | string | null | boolean | undefined | {}): boolean {
   if (b === NO_CHANGE) return false;
 
   const compareValueA = Array.isArray(a) ? a[StylingMapArrayIndex.RawValuePosition] : a;
@@ -207,7 +192,7 @@ export function hasValueChanged(
 /**
  * Determines whether the provided styling value is truthy or falsy.
  */
-export function isStylingValueDefined<T extends string|number|{}|null>(value: T):
+export function isStylingValueDefined<T extends string|number|{}|null|undefined>(value: T):
     value is NonNullable<T> {
   // the reason why null is compared against is because
   // a CSS class value that is set to `false` must be
@@ -247,7 +232,7 @@ export function isStylingContext(value: any): boolean {
       typeof value[1] !== 'string';
 }
 
-export function isStylingMapArray(value: TStylingContext | StylingMapArray | null): boolean {
+export function isStylingMapArray(value: any): boolean {
   // the StylingMapArray is in the format of [initial, prop, string, prop, string]
   // and this is the defining value to distinguish between arrays
   return Array.isArray(value) &&
@@ -259,11 +244,11 @@ export function getInitialStylingValue(context: TStylingContext | StylingMapArra
   return map && (map[StylingMapArrayIndex.RawValuePosition] as string | null) || '';
 }
 
-export function hasClassInput(tNode: TNode) {
+export function hasClassInput(tNode: TStylingNode) {
   return (tNode.flags & TNodeFlags.hasClassInput) !== 0;
 }
 
-export function hasStyleInput(tNode: TNode) {
+export function hasStyleInput(tNode: TStylingNode) {
   return (tNode.flags & TNodeFlags.hasStyleInput) !== 0;
 }
 
@@ -295,13 +280,19 @@ export function forceClassesAsString(classes: string | {[key: string]: any} | nu
   return (classes as string) || '';
 }
 
-export function forceStylesAsString(styles: {[key: string]: any} | null | undefined): string {
+export function forceStylesAsString(
+    styles: {[key: string]: any} | string | null | undefined, hyphenateProps: boolean): string {
+  if (typeof styles == 'string') return styles;
   let str = '';
   if (styles) {
     const props = Object.keys(styles);
     for (let i = 0; i < props.length; i++) {
       const prop = props[i];
-      str = concatString(str, `${prop}:${styles[prop]}`, ';');
+      const propLabel = hyphenateProps ? hyphenate(prop) : prop;
+      const value = styles[prop];
+      if (value !== null) {
+        str = concatString(str, `${propLabel}:${value}`, ';');
+      }
     }
   }
   return str;
@@ -396,8 +387,9 @@ export function normalizeIntoStylingMap(
     bindingValue: null | StylingMapArray,
     newValues: {[key: string]: any} | string | null | undefined,
     normalizeProps?: boolean): StylingMapArray {
-  const stylingMapArr: StylingMapArray = Array.isArray(bindingValue) ? bindingValue : [null];
-  stylingMapArr[StylingMapArrayIndex.RawValuePosition] = newValues || null;
+  const stylingMapArr: StylingMapArray =
+      Array.isArray(bindingValue) ? bindingValue : allocStylingMapArray(null);
+  stylingMapArr[StylingMapArrayIndex.RawValuePosition] = newValues;
 
   // because the new values may not include all the properties
   // that the old ones had, all values are set to `null` before
@@ -413,10 +405,8 @@ export function normalizeIntoStylingMap(
   let map: {[key: string]: any}|undefined|null;
   let allValuesTrue = false;
   if (typeof newValues === 'string') {  // [class] bindings allow string values
-    if (newValues.length) {
-      props = newValues.split(/\s+/);
-      allValuesTrue = true;
-    }
+    props = splitOnWhitespace(newValues);
+    allValuesTrue = props !== null;
   } else {
     props = newValues ? Object.keys(newValues) : null;
     map = newValues;
@@ -432,4 +422,36 @@ export function normalizeIntoStylingMap(
   }
 
   return stylingMapArr;
+}
+
+export function splitOnWhitespace(text: string): string[]|null {
+  let array: string[]|null = null;
+  let length = text.length;
+  let start = 0;
+  let foundChar = false;
+  for (let i = 0; i < length; i++) {
+    const char = text.charCodeAt(i);
+    if (char <= 32 /*' '*/) {
+      if (foundChar) {
+        if (array === null) array = [];
+        array.push(text.substring(start, i));
+        foundChar = false;
+      }
+      start = i + 1;
+    } else {
+      foundChar = true;
+    }
+  }
+  if (foundChar) {
+    if (array === null) array = [];
+    array.push(text.substring(start, length));
+    foundChar = false;
+  }
+  return array;
+}
+
+// TODO (matsko|AndrewKushnir): refactor this once we figure out how to generate separate
+// `input('class') + classMap()` instructions.
+export function selectClassBasedInputName(inputs: PropertyAliases): string {
+  return inputs.hasOwnProperty('class') ? 'class' : 'className';
 }

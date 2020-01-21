@@ -33,6 +33,15 @@
     "name": "NG_INJECTOR_DEF"
   },
   {
+    "name": "NG_INJ_DEF"
+  },
+  {
+    "name": "NG_PROV_DEF"
+  },
+  {
+    "name": "NG_PROV_DEF_FALLBACK"
+  },
+  {
     "name": "NG_TEMP_TOKEN_PATH"
   },
   {
@@ -124,6 +133,12 @@
   },
   {
     "name": "getNullInjector"
+  },
+  {
+    "name": "getOwnDefinition"
+  },
+  {
+    "name": "getTypeName"
   },
   {
     "name": "getUndecoratedInjectableFactory"

@@ -13,11 +13,8 @@ import {FileUtils} from '../file_utils';
 
 import {OutputPathFn} from './output_path';
 
-
-
 /**
- * An object that holds translations that have been loaded
- * from a translation file.
+ * An object that holds information to be used to translate files.
  */
 export interface TranslationBundle {
   locale: string;
@@ -51,10 +48,13 @@ export interface TranslationHandler {
    * @param outputPathFn A function that returns an absolute path where the output file should be
    * written.
    * @param translations A collection of translations to apply to this file.
+   * @param sourceLocale The locale of the original application source. If provided then an
+   * additional copy of the application is created under this locale just with the `$localize` calls
+   * stripped out.
    */
   translate(
       diagnostics: Diagnostics, sourceRoot: string, relativeFilePath: string, contents: Buffer,
-      outputPathFn: OutputPathFn, translations: TranslationBundle[]): void;
+      outputPathFn: OutputPathFn, translations: TranslationBundle[], sourceLocale?: string): void;
 }
 
 /**
@@ -66,14 +66,15 @@ export class Translator {
 
   translateFiles(
       inputPaths: string[], rootPath: string, outputPathFn: OutputPathFn,
-      translations: TranslationBundle[]): void {
+      translations: TranslationBundle[], sourceLocale?: string): void {
     inputPaths.forEach(inputPath => {
       const contents = FileUtils.readFileBuffer(inputPath);
       const relativePath = relative(rootPath, inputPath);
       for (const resourceHandler of this.resourceHandlers) {
         if (resourceHandler.canTranslate(relativePath, contents)) {
           return resourceHandler.translate(
-              this.diagnostics, rootPath, relativePath, contents, outputPathFn, translations);
+              this.diagnostics, rootPath, relativePath, contents, outputPathFn, translations,
+              sourceLocale);
         }
       }
       this.diagnostics.error(`Unable to handle resource file: ${inputPath}`);

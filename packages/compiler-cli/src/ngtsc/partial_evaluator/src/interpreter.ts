@@ -10,13 +10,14 @@ import * as ts from 'typescript';
 
 import {Reference} from '../../imports';
 import {OwningModule} from '../../imports/src/references';
+import {DependencyTracker} from '../../incremental/api';
 import {Declaration, InlineDeclaration, ReflectionHost} from '../../reflection';
 import {isDeclaration} from '../../util/src/typescript';
 
 import {ArrayConcatBuiltinFn, ArraySliceBuiltinFn} from './builtin';
 import {DynamicValue} from './dynamic';
-import {DependencyTracker, ForeignFunctionResolver} from './interface';
-import {BuiltinFn, EnumValue, ResolvedValue, ResolvedValueArray, ResolvedValueMap} from './result';
+import {ForeignFunctionResolver} from './interface';
+import {BuiltinFn, EnumValue, ResolvedModule, ResolvedValue, ResolvedValueArray, ResolvedValueMap} from './result';
 import {evaluateTsHelperInline} from './ts_helpers';
 
 
@@ -89,7 +90,7 @@ interface Context {
 export class StaticInterpreter {
   constructor(
       private host: ReflectionHost, private checker: ts.TypeChecker,
-      private dependencyTracker?: DependencyTracker) {}
+      private dependencyTracker: DependencyTracker|null) {}
 
   visit(node: ts.Expression, context: Context): ResolvedValue {
     return this.visitExpression(node, context);
@@ -138,7 +139,7 @@ export class StaticInterpreter {
     } else if (this.host.isClass(node)) {
       result = this.visitDeclaration(node, context);
     } else {
-      return DynamicValue.fromUnknownExpressionType(node);
+      return DynamicValue.fromUnsupportedSyntax(node);
     }
     if (result instanceof DynamicValue && result.node !== node) {
       return DynamicValue.fromDynamicInput(node, result);
@@ -160,7 +161,7 @@ export class StaticInterpreter {
     return array;
   }
 
-  private visitObjectLiteralExpression(node: ts.ObjectLiteralExpression, context: Context):
+  protected visitObjectLiteralExpression(node: ts.ObjectLiteralExpression, context: Context):
       ResolvedValue {
     const map: ResolvedValueMap = new Map<string, ResolvedValue>();
     for (let i = 0; i < node.properties.length; i++) {
@@ -183,10 +184,14 @@ export class StaticInterpreter {
         const spread = this.visitExpression(property.expression, context);
         if (spread instanceof DynamicValue) {
           return DynamicValue.fromDynamicInput(node, spread);
-        } else if (!(spread instanceof Map)) {
-          throw new Error(`Unexpected value in spread assignment: ${spread}`);
+        } else if (spread instanceof Map) {
+          spread.forEach((value, key) => map.set(key, value));
+        } else if (spread instanceof ResolvedModule) {
+          spread.getExports().forEach((value, key) => map.set(key, value));
+        } else {
+          return DynamicValue.fromDynamicInput(
+              node, DynamicValue.fromInvalidExpressionType(property, spread));
         }
-        spread.forEach((value, key) => map.set(key, value));
       } else {
         return DynamicValue.fromUnknown(node);
       }
@@ -245,8 +250,8 @@ export class StaticInterpreter {
   }
 
   private visitDeclaration(node: ts.Declaration, context: Context): ResolvedValue {
-    if (this.dependencyTracker) {
-      this.dependencyTracker.trackFileDependency(node.getSourceFile(), context.originatingFile);
+    if (this.dependencyTracker !== null) {
+      this.dependencyTracker.addDependency(context.originatingFile, node.getSourceFile());
     }
     if (this.host.isClass(node)) {
       return this.getReference(node, context);
@@ -292,9 +297,6 @@ export class StaticInterpreter {
   private visitElementAccessExpression(node: ts.ElementAccessExpression, context: Context):
       ResolvedValue {
     const lhs = this.visitExpression(node.expression, context);
-    if (node.argumentExpression === undefined) {
-      throw new Error(`Expected argument in ElementAccessExpression`);
-    }
     if (lhs instanceof DynamicValue) {
       return DynamicValue.fromDynamicInput(node, lhs);
     }
@@ -303,8 +305,7 @@ export class StaticInterpreter {
       return DynamicValue.fromDynamicInput(node, rhs);
     }
     if (typeof rhs !== 'string' && typeof rhs !== 'number') {
-      throw new Error(
-          `ElementAccessExpression index should be string or number, got ${typeof rhs}: ${rhs}`);
+      return DynamicValue.fromInvalidExpressionType(node, rhs);
     }
 
     return this.accessHelper(node, lhs, rhs, context);
@@ -326,19 +327,18 @@ export class StaticInterpreter {
     if (declarations === null) {
       return DynamicValue.fromUnknown(node);
     }
-    const map = new Map<string, ResolvedValue>();
-    declarations.forEach((decl, name) => {
+
+    return new ResolvedModule(declarations, decl => {
       const declContext = {
           ...context, ...joinModuleContext(context, node, decl),
       };
+
       // Visit both concrete and inline declarations.
       // TODO(alxhub): remove cast once TS is upgraded in g3.
-      const value = decl.node !== null ?
+      return decl.node !== null ?
           this.visitDeclaration(decl.node, declContext) :
           this.visitExpression((decl as InlineDeclaration).expression, declContext);
-      map.set(name, value);
     });
-    return map;
   }
 
   private accessHelper(
@@ -351,6 +351,8 @@ export class StaticInterpreter {
       } else {
         return undefined;
       }
+    } else if (lhs instanceof ResolvedModule) {
+      return lhs.getExport(strIndex);
     } else if (Array.isArray(lhs)) {
       if (rhs === 'length') {
         return lhs.length;
@@ -360,10 +362,7 @@ export class StaticInterpreter {
         return new ArrayConcatBuiltinFn(node, lhs);
       }
       if (typeof rhs !== 'number' || !Number.isInteger(rhs)) {
-        return DynamicValue.fromUnknown(node);
-      }
-      if (rhs < 0 || rhs >= lhs.length) {
-        throw new Error(`Index out of bounds: ${rhs} vs ${lhs.length}`);
+        return DynamicValue.fromInvalidExpressionType(node, rhs);
       }
       return lhs[rhs];
     } else if (lhs instanceof Reference) {
@@ -498,7 +497,7 @@ export class StaticInterpreter {
       ResolvedValue {
     const operatorKind = node.operator;
     if (!UNARY_OPERATORS.has(operatorKind)) {
-      throw new Error(`Unsupported prefix unary operator: ${ts.SyntaxKind[operatorKind]}`);
+      return DynamicValue.fromUnsupportedSyntax(node);
     }
 
     const op = UNARY_OPERATORS.get(operatorKind) !;
@@ -513,14 +512,14 @@ export class StaticInterpreter {
   private visitBinaryExpression(node: ts.BinaryExpression, context: Context): ResolvedValue {
     const tokenKind = node.operatorToken.kind;
     if (!BINARY_OPERATORS.has(tokenKind)) {
-      throw new Error(`Unsupported binary operator: ${ts.SyntaxKind[tokenKind]}`);
+      return DynamicValue.fromUnsupportedSyntax(node);
     }
 
     const opRecord = BINARY_OPERATORS.get(tokenKind) !;
     let lhs: ResolvedValue, rhs: ResolvedValue;
     if (opRecord.literal) {
-      lhs = literal(this.visitExpression(node.left, context));
-      rhs = literal(this.visitExpression(node.right, context));
+      lhs = literal(this.visitExpression(node.left, context), node.left);
+      rhs = literal(this.visitExpression(node.right, context), node.right);
     } else {
       lhs = this.visitExpression(node.left, context);
       rhs = this.visitExpression(node.right, context);
@@ -554,9 +553,9 @@ export class StaticInterpreter {
   private visitSpreadElement(node: ts.SpreadElement, context: Context): ResolvedValueArray {
     const spread = this.visitExpression(node.expression, context);
     if (spread instanceof DynamicValue) {
-      return [DynamicValue.fromDynamicInput(node.expression, spread)];
+      return [DynamicValue.fromDynamicInput(node, spread)];
     } else if (!Array.isArray(spread)) {
-      throw new Error(`Unexpected value in spread expression: ${spread}`);
+      return [DynamicValue.fromInvalidExpressionType(node, spread)];
     } else {
       return spread;
     }
@@ -582,12 +581,12 @@ function isFunctionOrMethodReference(ref: Reference<ts.Node>):
       ts.isFunctionExpression(ref.node);
 }
 
-function literal(value: ResolvedValue): any {
+function literal(value: ResolvedValue, node: ts.Node): any {
   if (value instanceof DynamicValue || value === null || value === undefined ||
       typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     return value;
   }
-  throw new Error(`Value ${value} is not literal and cannot be used in this context.`);
+  return DynamicValue.fromInvalidExpressionType(node, value);
 }
 
 function isVariableDeclarationDeclared(node: ts.VariableDeclaration): boolean {

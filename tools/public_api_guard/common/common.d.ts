@@ -13,7 +13,7 @@ export declare class CommonModule {
 }
 
 export declare class CurrencyPipe implements PipeTransform {
-    constructor(_locale: string);
+    constructor(_locale: string, _defaultCurrencyCode?: string);
     transform(value: any, currencyCode?: string, display?: 'code' | 'symbol' | 'symbol-narrow' | string | boolean, digitsInfo?: string, locale?: string): string | null;
 }
 
@@ -25,30 +25,6 @@ export declare class DatePipe implements PipeTransform {
 export declare class DecimalPipe implements PipeTransform {
     constructor(_locale: string);
     transform(value: any, digitsInfo?: string, locale?: string): string | null;
-}
-
-export declare class DeprecatedCurrencyPipe implements PipeTransform {
-    constructor(_locale: string);
-    transform(value: any, currencyCode?: string, symbolDisplay?: boolean, digits?: string): string | null;
-}
-
-export declare class DeprecatedDatePipe implements PipeTransform {
-    constructor(_locale: string);
-    transform(value: any, pattern?: string): string | null;
-}
-
-export declare class DeprecatedDecimalPipe implements PipeTransform {
-    constructor(_locale: string);
-    transform(value: any, digits?: string): string | null;
-}
-
-/** @deprecated */
-export declare class DeprecatedI18NPipesModule {
-}
-
-export declare class DeprecatedPercentPipe implements PipeTransform {
-    constructor(_locale: string);
-    transform(value: any, digits?: string): string | null;
 }
 
 export declare const DOCUMENT: InjectionToken<Document>;
@@ -86,6 +62,8 @@ export declare function getLocaleDateTimeFormat(locale: string, width: FormatWid
 export declare function getLocaleDayNames(locale: string, formStyle: FormStyle, width: TranslationWidth): string[];
 
 export declare function getLocaleDayPeriods(locale: string, formStyle: FormStyle, width: TranslationWidth): [string, string];
+
+export declare function getLocaleDirection(locale: string): 'ltr' | 'rtl';
 
 export declare function getLocaleEraNames(locale: string, width: TranslationWidth): [string, string];
 
@@ -210,10 +188,10 @@ export declare class LowerCasePipe implements PipeTransform {
 }
 
 export declare class NgClass extends NgClassBase implements DoCheck {
-    klass: string;
-    ngClass: string | string[] | Set<string> | {
+    set klass(value: string);
+    set ngClass(value: string | string[] | Set<string> | {
         [klass: string]: any;
-    };
+    });
     constructor(delegate: NgClassImpl);
     ngDoCheck(): void;
 }
@@ -224,8 +202,8 @@ export declare class NgClassBase {
     getValue(): {
         [key: string]: any;
     } | null;
-    static ngDirectiveDef: any;
-    static ngFactoryDef: any;
+    static ɵdir: any;
+    static ɵfac: any;
 }
 
 export declare class NgComponentOutlet implements OnChanges, OnDestroy {
@@ -238,45 +216,45 @@ export declare class NgComponentOutlet implements OnChanges, OnDestroy {
     ngOnDestroy(): void;
 }
 
-export declare class NgForOf<T> implements DoCheck {
-    ngForOf: NgIterable<T> | undefined | null;
-    ngForTemplate: TemplateRef<NgForOfContext<T>>;
-    ngForTrackBy: TrackByFunction<T>;
-    constructor(_viewContainer: ViewContainerRef, _template: TemplateRef<NgForOfContext<T>>, _differs: IterableDiffers);
+export declare class NgForOf<T, U extends NgIterable<T> = NgIterable<T>> implements DoCheck {
+    set ngForOf(ngForOf: (U & NgIterable<T>) | undefined | null);
+    set ngForTemplate(value: TemplateRef<NgForOfContext<T, U>>);
+    get ngForTrackBy(): TrackByFunction<T>;
+    set ngForTrackBy(fn: TrackByFunction<T>);
+    constructor(_viewContainer: ViewContainerRef, _template: TemplateRef<NgForOfContext<T, U>>, _differs: IterableDiffers);
     ngDoCheck(): void;
-    static ngTemplateContextGuard<T>(dir: NgForOf<T>, ctx: any): ctx is NgForOfContext<T>;
+    static ngTemplateContextGuard<T, U extends NgIterable<T>>(dir: NgForOf<T, U>, ctx: any): ctx is NgForOfContext<T, U>;
 }
 
-export declare class NgForOfContext<T> {
+export declare class NgForOfContext<T, U extends NgIterable<T> = NgIterable<T>> {
     $implicit: T;
     count: number;
-    readonly even: boolean;
-    readonly first: boolean;
+    get even(): boolean;
+    get first(): boolean;
     index: number;
-    readonly last: boolean;
-    ngForOf: NgIterable<T>;
-    readonly odd: boolean;
-    constructor($implicit: T, ngForOf: NgIterable<T>, index: number, count: number);
+    get last(): boolean;
+    ngForOf: U;
+    get odd(): boolean;
+    constructor($implicit: T, ngForOf: U, index: number, count: number);
 }
 
-export declare class NgIf {
-    ngIf: any;
-    ngIfElse: TemplateRef<NgIfContext> | null;
-    ngIfThen: TemplateRef<NgIfContext> | null;
-    constructor(_viewContainer: ViewContainerRef, templateRef: TemplateRef<NgIfContext>);
+export declare class NgIf<T = unknown> {
+    set ngIf(condition: T);
+    set ngIfElse(templateRef: TemplateRef<NgIfContext<T>> | null);
+    set ngIfThen(templateRef: TemplateRef<NgIfContext<T>> | null);
+    constructor(_viewContainer: ViewContainerRef, templateRef: TemplateRef<NgIfContext<T>>);
     static ngTemplateGuard_ngIf: 'binding';
+    static ngTemplateContextGuard<T>(dir: NgIf<T>, ctx: any): ctx is NgIfContext<T>;
 }
 
-export declare class NgIfContext {
-    $implicit: any;
-    ngIf: any;
+export declare class NgIfContext<T = unknown> {
+    $implicit: T;
+    ngIf: T;
 }
 
 export declare class NgLocaleLocalization extends NgLocalization {
-    /** @deprecated */ protected deprecatedPluralFn?: ((locale: string, value: string | number) => Plural) | null | undefined;
     protected locale: string;
-    constructor(locale: string,
-    /** @deprecated */ deprecatedPluralFn?: ((locale: string, value: string | number) => Plural) | null | undefined);
+    constructor(locale: string);
     getPluralCategory(value: any, locale?: string): string;
 }
 
@@ -285,7 +263,7 @@ export declare abstract class NgLocalization {
 }
 
 export declare class NgPlural {
-    ngPlural: number;
+    set ngPlural(value: number);
     constructor(_localization: NgLocalization);
     addCase(value: string, switchView: SwitchView): void;
 }
@@ -296,9 +274,9 @@ export declare class NgPluralCase {
 }
 
 export declare class NgStyle extends NgStyleBase implements DoCheck {
-    ngStyle: {
+    set ngStyle(value: {
         [klass: string]: any;
-    } | null;
+    } | null);
     constructor(delegate: NgStyleImpl);
     ngDoCheck(): void;
 }
@@ -309,12 +287,12 @@ export declare class NgStyleBase {
     getValue(): {
         [key: string]: any;
     } | null;
-    static ngDirectiveDef: any;
-    static ngFactory: any;
+    static ɵdir: any;
+    static ɵfac: any;
 }
 
 export declare class NgSwitch {
-    ngSwitch: any;
+    set ngSwitch(newValue: any);
 }
 
 export declare class NgSwitchCase implements DoCheck {
@@ -376,13 +354,13 @@ export declare class PercentPipe implements PipeTransform {
 }
 
 export declare abstract class PlatformLocation {
-    abstract readonly hash: string;
-    abstract readonly hostname: string;
-    abstract readonly href: string;
-    abstract readonly pathname: string;
-    abstract readonly port: string;
-    abstract readonly protocol: string;
-    abstract readonly search: string;
+    abstract get hash(): string;
+    abstract get hostname(): string;
+    abstract get href(): string;
+    abstract get pathname(): string;
+    abstract get port(): string;
+    abstract get protocol(): string;
+    abstract get search(): string;
     abstract back(): void;
     abstract forward(): void;
     abstract getBaseHrefFromDOM(): string;
@@ -446,7 +424,7 @@ export declare abstract class ViewportScroller {
     abstract scrollToPosition(position: [number, number]): void;
     abstract setHistoryScrollRestoration(scrollRestoration: 'auto' | 'manual'): void;
     abstract setOffset(offset: [number, number] | (() => [number, number])): void;
-    static ngInjectableDef: never;
+    static ɵprov: never;
 }
 
 export declare enum WeekDay {

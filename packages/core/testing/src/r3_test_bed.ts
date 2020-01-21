@@ -35,11 +35,9 @@ import {MetadataOverride} from './metadata_override';
 import {TestBed} from './test_bed';
 import {ComponentFixtureAutoDetect, ComponentFixtureNoNgZone, TestBedStatic, TestComponentRenderer, TestModuleMetadata} from './test_bed_common';
 import {R3TestBedCompiler} from './r3_test_bed_compiler';
-import {clearRegisteredModuleState} from '../../src/linker/ng_module_factory_registration';
 
 let _nextRootElementId = 0;
 
-const UNDEFINED: Symbol = Symbol('UNDEFINED');
 
 /**
  * @description
@@ -268,7 +266,8 @@ export class TestBedRender3 implements TestBed {
     if (token as unknown === TestBedRender3) {
       return this as any;
     }
-    const result = this.testModuleRef.injector.get(token, UNDEFINED as{}, flags);
+    const UNDEFINED = {};
+    const result = this.testModuleRef.injector.get(token, UNDEFINED, flags);
     return result === UNDEFINED ? this.compiler.injector.get(token, notFoundValue, flags) as any :
                                   result;
   }
@@ -328,11 +327,11 @@ export class TestBedRender3 implements TestBed {
     const rootElId = `root-ng-internal-isolated-${_nextRootElementId++}`;
     testComponentRenderer.insertRootElement(rootElId);
 
-    const componentDef = (type as any).ngComponentDef;
+    const componentDef = (type as any).ɵcmp;
 
     if (!componentDef) {
       throw new Error(
-          `It looks like '${stringify(type)}' has not been IVY compiled - it has no 'ngComponentDef' field`);
+          `It looks like '${stringify(type)}' has not been IVY compiled - it has no 'ɵcmp' field`);
     }
 
     // TODO: Don't cast as `InjectionToken<boolean>`, proper type is boolean[]
@@ -352,6 +351,10 @@ export class TestBedRender3 implements TestBed {
     return fixture;
   }
 
+  /**
+   * @internal strip this from published d.ts files due to
+   * https://github.com/microsoft/TypeScript/issues/36216
+   */
   private get compiler(): R3TestBedCompiler {
     if (this._compiler === null) {
       throw new Error(`Need to call TestBed.initTestEnvironment() first`);
@@ -359,6 +362,10 @@ export class TestBedRender3 implements TestBed {
     return this._compiler;
   }
 
+  /**
+   * @internal strip this from published d.ts files due to
+   * https://github.com/microsoft/TypeScript/issues/36216
+   */
   private get testModuleRef(): NgModuleRef<any> {
     if (this._testModuleRef === null) {
       this._testModuleRef = this.compiler.finalize();

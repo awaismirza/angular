@@ -211,6 +211,8 @@ export class Identifiers {
       o.ExternalReference = {name: 'ɵɵinjectPipeChangeDetectorRef', moduleName: CORE};
 
   static directiveInject: o.ExternalReference = {name: 'ɵɵdirectiveInject', moduleName: CORE};
+  static invalidFactory: o.ExternalReference = {name: 'ɵɵinvalidFactory', moduleName: CORE};
+  static invalidFactoryDep: o.ExternalReference = {name: 'ɵɵinvalidFactoryDep', moduleName: CORE};
 
   static templateRefExtractor:
       o.ExternalReference = {name: 'ɵɵtemplateRefExtractor', moduleName: CORE};
@@ -218,13 +220,6 @@ export class Identifiers {
   static resolveWindow: o.ExternalReference = {name: 'ɵɵresolveWindow', moduleName: CORE};
   static resolveDocument: o.ExternalReference = {name: 'ɵɵresolveDocument', moduleName: CORE};
   static resolveBody: o.ExternalReference = {name: 'ɵɵresolveBody', moduleName: CORE};
-
-  static defineBase: o.ExternalReference = {name: 'ɵɵdefineBase', moduleName: CORE};
-
-  static BaseDef: o.ExternalReference = {
-    name: 'ɵɵBaseDef',
-    moduleName: CORE,
-  };
 
   static defineComponent: o.ExternalReference = {name: 'ɵɵdefineComponent', moduleName: CORE};
 
@@ -265,6 +260,11 @@ export class Identifiers {
     moduleName: CORE,
   };
 
+  static ModuleWithProviders: o.ExternalReference = {
+    name: 'ModuleWithProviders',
+    moduleName: CORE,
+  };
+
   static defineNgModule: o.ExternalReference = {name: 'ɵɵdefineNgModule', moduleName: CORE};
   static setNgModuleScope: o.ExternalReference = {name: 'ɵɵsetNgModuleScope', moduleName: CORE};
 
@@ -283,6 +283,9 @@ export class Identifiers {
 
   static InheritDefinitionFeature:
       o.ExternalReference = {name: 'ɵɵInheritDefinitionFeature', moduleName: CORE};
+
+  static CopyDefinitionFeature:
+      o.ExternalReference = {name: 'ɵɵCopyDefinitionFeature', moduleName: CORE};
 
   static ProvidersFeature: o.ExternalReference = {name: 'ɵɵProvidersFeature', moduleName: CORE};
 

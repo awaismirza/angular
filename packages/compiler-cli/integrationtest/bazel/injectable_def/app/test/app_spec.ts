@@ -125,14 +125,14 @@ describe('ngInjectableDef Bazel Integration', () => {
     expect(TestBed.inject(Service).value).toEqual('overridden');
   });
 
-  it('does not override existing ngInjectableDef', () => {
+  it('does not override existing ɵprov', () => {
     @Injectable({
       providedIn: 'root',
       useValue: new Service(false),
     })
     class Service {
       constructor(public value: boolean) {}
-      static ngInjectableDef = {
+      static ɵprov = {
         providedIn: 'root',
         factory: () => new Service(true),
         token: Service,
@@ -143,7 +143,7 @@ describe('ngInjectableDef Bazel Integration', () => {
     expect(TestBed.inject(Service).value).toEqual(true);
   });
 
-  it('does not override existing ngInjectableDef in case of inheritance', () => {
+  it('does not override existing ɵprov in case of inheritance', () => {
     @Injectable({
       providedIn: 'root',
       useValue: new ParentService(false),
@@ -159,6 +159,32 @@ describe('ngInjectableDef Bazel Integration', () => {
     // We are asserting that system throws an error, rather than taking the inherited annotation.
     expect(() => TestBed.inject(ChildService).value).toThrowError(/ChildService/);
   });
+
+  it('uses legacy `ngInjectable` property even if it inherits from a class that has `ɵprov` property',
+     () => {
+       @Injectable({
+         providedIn: 'root',
+         useValue: new ParentService('parent'),
+       })
+       class ParentService {
+         constructor(public value: string) {}
+       }
+
+       // ChildServices exteds ParentService but does not have @Injectable
+       class ChildService extends ParentService {
+         constructor(value: string) { super(value); }
+         static ngInjectableDef = {
+           providedIn: 'root',
+           factory: () => new ChildService('child'),
+           token: ChildService,
+         };
+       }
+
+       TestBed.configureTestingModule({});
+       // We are asserting that system throws an error, rather than taking the inherited
+       // annotation.
+       expect(TestBed.inject(ChildService).value).toEqual('child');
+     });
 
   it('NgModule injector understands requests for INJECTABLE', () => {
     TestBed.configureTestingModule({

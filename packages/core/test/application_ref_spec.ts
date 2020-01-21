@@ -49,7 +49,7 @@ class SomeComponent {
     function createModule(options: CreateModuleOptions): Type<any>;
     function createModule(providersOrOptions: any[] | CreateModuleOptions | undefined): Type<any> {
       let options: CreateModuleOptions = {};
-      if (providersOrOptions instanceof Array) {
+      if (Array.isArray(providersOrOptions)) {
         options = {providers: providersOrOptions};
       } else {
         options = providersOrOptions || {};
@@ -346,11 +346,9 @@ class SomeComponent {
       it('should wait for APP_INITIALIZER to set providers for `LOCALE_ID`', async() => {
         let locale: string = '';
 
-        const promise = Promise.resolve().then(() => { locale = 'fr-FR'; });
-
         const testModule = createModule({
           providers: [
-            {provide: APP_INITIALIZER, useValue: () => promise, multi: true},
+            {provide: APP_INITIALIZER, useValue: () => locale = 'fr-FR', multi: true},
             {provide: LOCALE_ID, useFactory: () => locale}
           ]
         });
@@ -375,7 +373,7 @@ class SomeComponent {
            }, 1);
 
            const compilerFactory: CompilerFactory =
-               defaultPlatform.injector.get(CompilerFactory, null);
+               defaultPlatform.injector.get(CompilerFactory, null) !;
            const moduleFactory = compilerFactory.createCompiler().compileModuleSync(
                createModule([{provide: APP_INITIALIZER, useValue: () => promise, multi: true}]));
            defaultPlatform.bootstrapModuleFactory(moduleFactory).then(_ => {
@@ -385,7 +383,7 @@ class SomeComponent {
 
       it('should rethrow sync errors even if the exceptionHandler is not rethrowing', async(() => {
            const compilerFactory: CompilerFactory =
-               defaultPlatform.injector.get(CompilerFactory, null);
+               defaultPlatform.injector.get(CompilerFactory, null) !;
            const moduleFactory = compilerFactory.createCompiler().compileModuleSync(createModule(
                [{provide: APP_INITIALIZER, useValue: () => { throw 'Test'; }, multi: true}]));
            expect(() => defaultPlatform.bootstrapModuleFactory(moduleFactory)).toThrow('Test');
@@ -397,7 +395,7 @@ class SomeComponent {
       it('should rethrow promise errors even if the exceptionHandler is not rethrowing',
          async(() => {
            const compilerFactory: CompilerFactory =
-               defaultPlatform.injector.get(CompilerFactory, null);
+               defaultPlatform.injector.get(CompilerFactory, null) !;
            const moduleFactory = compilerFactory.createCompiler().compileModuleSync(createModule(
                [{provide: APP_INITIALIZER, useValue: () => Promise.reject('Test'), multi: true}]));
            defaultPlatform.bootstrapModuleFactory(moduleFactory)
@@ -417,7 +415,7 @@ class SomeComponent {
       @Component({template: '<ng-container #vc></ng-container>'})
       class ContainerComp {
         // TODO(issue/24571): remove '!'.
-        @ViewChild('vc', {read: ViewContainerRef, static: false})
+        @ViewChild('vc', {read: ViewContainerRef})
         vc !: ViewContainerRef;
       }
 

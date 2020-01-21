@@ -8,7 +8,10 @@
 
 import {Position, isSyntaxError} from '@angular/compiler';
 import * as ts from 'typescript';
+
 import {AbsoluteFsPath, absoluteFrom, getFileSystem, relative, resolve} from '../src/ngtsc/file_system';
+
+import {replaceTsWithNgInErrors} from './ngtsc/diagnostics';
 import * as api from './transformers/api';
 import * as ng from './transformers/entry_points';
 import {createMessageDiagnostic} from './transformers/util';
@@ -36,23 +39,30 @@ export function formatDiagnosticPosition(
 }
 
 export function flattenDiagnosticMessageChain(
-    chain: api.DiagnosticMessageChain, host: ts.FormatDiagnosticsHost = defaultFormatHost): string {
-  let result = chain.messageText;
-  let indent = 1;
-  let current = chain.next;
+    chain: api.DiagnosticMessageChain, host: ts.FormatDiagnosticsHost = defaultFormatHost,
+    indent = 0): string {
   const newLine = host.getNewLine();
-  while (current) {
+  let result = '';
+  if (indent) {
     result += newLine;
+
     for (let i = 0; i < indent; i++) {
       result += '  ';
     }
-    result += current.messageText;
-    const position = current.position;
-    if (position) {
-      result += ` at ${formatDiagnosticPosition(position, host)}`;
+  }
+  result += chain.messageText;
+
+  const position = chain.position;
+  // add position if available, and we are not at the depest frame
+  if (position && indent !== 0) {
+    result += ` at ${formatDiagnosticPosition(position, host)}`;
+  }
+
+  indent++;
+  if (chain.next) {
+    for (const kid of chain.next) {
+      result += flattenDiagnosticMessageChain(kid, host, indent);
     }
-    current = current.next;
-    indent++;
   }
   return result;
 }
@@ -87,7 +97,8 @@ export function formatDiagnostics(
     return diags
         .map(diagnostic => {
           if (api.isTsDiagnostic(diagnostic)) {
-            return ts.formatDiagnostics([diagnostic], host);
+            return replaceTsWithNgInErrors(
+                ts.formatDiagnosticsWithColorAndContext([diagnostic], host));
           } else {
             return formatDiagnostic(diagnostic, host);
           }

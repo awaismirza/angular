@@ -44,43 +44,12 @@ export class Pipes {
 export class NoValueAttribute {
 }
 
-
-@Component({
-  template: '<h1 model="~{attribute-binding-model}test"></h1>',
-})
-export class AttributeBinding {
-  test: string = 'test';
-}
-
-@Component({
-  template: '<h1 [model]="~{property-binding-model}test"></h1>',
-})
-export class PropertyBinding {
-  test: string = 'test';
-}
-
-@Component({
-  template: '<h1 (model)="~{event-binding-model}modelChanged()"></h1>',
-})
-export class EventBinding {
-  test: string = 'test';
-
-  modelChanged() {}
-}
-
-@Component({
-  template: '<h1 [(model)]="~{two-way-binding-model}test"></h1>',
-})
-export class TwoWayBinding {
-  test: string = 'test';
-}
-
 @Directive({
   selector: '[string-model]',
 })
 export class StringModel {
   @Input() model: string = 'model';
-  @Output() modelChanged: EventEmitter<string> = new EventEmitter();
+  @Output() modelChange: EventEmitter<string> = new EventEmitter();
 }
 
 @Directive({
@@ -88,41 +57,32 @@ export class StringModel {
 })
 export class NumberModel {
   @Input('inputAlias') model: number = 0;
-  @Output('outputAlias') modelChanged: EventEmitter<number> = new EventEmitter();
+  @Output('outputAlias') modelChange: EventEmitter<number> = new EventEmitter();
 }
 
 interface Person {
   name: string;
   age: number;
-}
-
-@Component({
-  template: '<div *ngFor="~{for-empty}"></div>',
-})
-export class ForOfEmpty {
-}
-
-@Component({
-  template: '<div *ngFor="let ~{for-let-empty}"></div>',
-})
-export class ForOfLetEmpty {
-}
-
-@Component({
-  template: '<div *ngFor="let i = ~{for-let-i-equal}"></div>',
-})
-export class ForLetIEqual {
+  street: string;
 }
 
 @Component({
   template: `
-    <div *ngFor="~{for-let}let ~{for-person}person ~{for-of}of ~{for-people}people">
-      <span>Name: {{~{for-interp-person}person.~{for-interp-name}name}}</span>
-      <span>Age: {{person.~{for-interp-age}age}}</span>
-    </div>`,
+    <div *ngFor="let person of people | async">
+      {{person.~{async-person-name}name}}
+    </div>
+    <div *ngIf="promisedPerson | async as person">
+      {{person.~{promised-person-name}name}}
+    </div>
+  `,
 })
-export class ForUsingComponent {
-  people: Person[] = [];
+export class AsyncForUsingComponent {
+  people: Promise<Person[]> = Promise.resolve([]);
+  promisedPerson: Promise<Person> = Promise.resolve({
+    name: 'John Doe',
+    age: 42,
+    street: '123 Angular Ln',
+  });
 }
 
 @Component({
@@ -139,6 +99,9 @@ export class ForUsingComponent {
 export class References {
 }
 
+/**
+ * This Component provides the `test-comp` selector.
+ */
 /*BeginTestComponent*/ @Component({
   selector: 'test-comp',
   template: '<div>Testing: {{name}}</div>',
@@ -152,8 +115,16 @@ export class TestComponent {
   templateUrl: 'test.ng',
 })
 export class TemplateReference {
+  /**
+   * This is the title of the `TemplateReference` Component.
+   */
   title = 'Some title';
   hero: Hero = {id: 1, name: 'Windstorm'};
+  heroes: Hero[] = [this.hero];
+  tupleArray: [string, Hero] = ['test', this.hero];
+  league: Hero[][] = [this.heroes];
+  heroesByName: {[name: string]: Hero} = {};
+  primitiveIndexType: {[name: string]: string} = {};
   anyValue: any;
   myClick(event: any) {}
 }
